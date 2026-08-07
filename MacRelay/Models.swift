@@ -38,13 +38,14 @@ struct ChatMessage: Identifiable {
     let isMention: Bool
 
     init(
+        timestamp: Date = Date(),
         sender: String? = nil,
         text: String,
         kind: MessageKind = .normal,
         isOwn: Bool = false,
         isMention: Bool = false
     ) {
-        timestamp = Date()
+        self.timestamp = timestamp
         self.sender = sender
         self.text = text
         self.kind = kind
@@ -88,11 +89,15 @@ struct ServerConfiguration: Codable, Equatable, Identifiable {
     var loggingEnabled = true
     var notifyOnMention = false
     var playNotificationSounds = true
+    var autoAwayEnabled = false
+    var autoAwayMinutes = 15
+    var autoAwayMessage = "Ikke ved Mac-en"
 
     private enum CodingKeys: String, CodingKey {
         case id, name, host, port, useTLS, nickname, alternateNickname
         case username, realName, autoJoinChannels, allowUntrustedCertificate
         case loggingEnabled, notifyOnMention, playNotificationSounds
+        case autoAwayEnabled, autoAwayMinutes, autoAwayMessage
     }
 
     init() {}
@@ -113,6 +118,9 @@ struct ServerConfiguration: Codable, Equatable, Identifiable {
         loggingEnabled = try values.decodeIfPresent(Bool.self, forKey: .loggingEnabled) ?? true
         notifyOnMention = try values.decodeIfPresent(Bool.self, forKey: .notifyOnMention) ?? false
         playNotificationSounds = try values.decodeIfPresent(Bool.self, forKey: .playNotificationSounds) ?? true
+        autoAwayEnabled = try values.decodeIfPresent(Bool.self, forKey: .autoAwayEnabled) ?? false
+        autoAwayMinutes = try values.decodeIfPresent(Int.self, forKey: .autoAwayMinutes) ?? 15
+        autoAwayMessage = try values.decodeIfPresent(String.self, forKey: .autoAwayMessage) ?? "Ikke ved Mac-en"
     }
 
     var channels: [String] {

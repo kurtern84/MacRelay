@@ -35,16 +35,92 @@ final class LogManager {
         NSWorkspace.shared.open(directory)
     }
 
+    func recentMessages(serverName: String, conversationName: String, limit: Int = 250) -> [ChatMessage] {
+        guard limit > 0,
+              let directory = logDirectory(serverName: serverName, conversationName: conversationName),
+              let files = try? fileManager.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.fileSizeKey],
+                options: [.skipsHiddenFiles]
+              ) else { return [] }
+
+        let logFiles = files
+            .filter { $0.pathExtension == "log" }
+            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+        var messages: [ChatMessage] = []
+        var remainingBytes = 512 * 1_024
+
+        for file in logFiles where messages.count < limit && remainingBytes > 0 {
+            let maximumBytes = min(remainingBytes, 128 * 1_024)
+            guard let tail = readTail(of: file, maximumBytes: maximumBytes),
+                  let contents = String(data: tail.data, encoding: .utf8) else { continue }
+            remainingBytes -= tail.data.count
+
+            var lines = contents.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+            if tail.wasTruncated, !lines.isEmpty { lines.removeFirst() }
+            let available = limit - messages.count
+            let parsed = lines.suffix(available).compactMap { parse($0, file: file) }
+            messages.insert(contentsOf: parsed, at: 0)
+        }
+
+        return Array(messages.suffix(limit))
+    }
+
     private func logURL(serverName: String, conversationName: String, createDirectories: Bool) -> URL? {
-        guard let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
+        guard let directory = logDirectory(serverName: serverName, conversationName: conversationName) else { return nil }
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
-        let directory = appSupport
+        if createDirectories { try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true) }
+        return directory.appendingPathComponent(formatter.string(from: Date()) + ".log")
+    }
+
+    private func logDirectory(serverName: String, conversationName: String) -> URL? {
+        fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
             .appendingPathComponent("MacRelay/Logs", isDirectory: true)
             .appendingPathComponent(safeComponent(serverName), isDirectory: true)
             .appendingPathComponent(safeComponent(conversationName), isDirectory: true)
-        if createDirectories { try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true) }
-        return directory.appendingPathComponent(formatter.string(from: Date()) + ".log")
+    }
+
+    private func readTail(of url: URL, maximumBytes: Int) -> (data: Data, wasTruncated: Bool)? {
+        guard maximumBytes > 0,
+              let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+              let fileSize = values.fileSize,
+              let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+
+        let byteCount = min(fileSize, maximumBytes)
+        let offset = max(0, fileSize - byteCount)
+        do {
+            try handle.seek(toOffset: UInt64(offset))
+            return (try handle.read(upToCount: byteCount) ?? Data(), offset > 0)
+        } catch {
+            return nil
+        }
+    }
+
+    private func parse(_ line: String, file: URL) -> ChatMessage? {
+        guard line.hasPrefix("["), line.count >= 11,
+              let closingBracket = line.firstIndex(of: "]") else { return nil }
+        let timeStart = line.index(after: line.startIndex)
+        let time = String(line[timeStart..<closingBracket])
+        let contentStart = line.index(after: closingBracket)
+        let content = line[contentStart...].trimmingCharacters(in: .whitespaces)
+        guard !content.isEmpty else { return nil }
+
+        let dateFormatter = DateFormatter()
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        let day = file.deletingPathExtension().lastPathComponent
+        let timestamp = dateFormatter.date(from: "\(day) \(time)") ?? Date()
+
+        if content.hasPrefix("<"), let end = content.firstIndex(of: ">") {
+            let sender = String(content[content.index(after: content.startIndex)..<end])
+            let text = content[content.index(after: end)...].trimmingCharacters(in: .whitespaces)
+            return ChatMessage(timestamp: timestamp, sender: sender, text: text)
+        }
+
+        let text = content.hasPrefix("* ") ? String(content.dropFirst(2)) : content
+        return ChatMessage(timestamp: timestamp, text: text, kind: .event)
     }
 
     private func safeComponent(_ value: String) -> String {

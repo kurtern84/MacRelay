@@ -13,12 +13,16 @@ MacRelay er en klassisk IRC-klient for macOS, bygget i Swift og SwiftUI. Målet 
 - IRC over vanlig TCP eller TLS
 - Favorittservere og flere serverprofiler
 - Automatisk tilkobling og kanal-join
+- Robust reconnect etter macOS-dvale og midlertidige nettverksbrudd
+- Automatisk away basert på systemets inaktivitetstid
 - Alternativt nick og NickServ-passord lagret i macOS Keychain
 - Kanal-topic, klassisk brukerstatus (`@` og `+`) og sortert brukerliste
 - Private samtaler, WHOIS og ignoreringsliste
 - Diskré markering av uleste meldinger og omtaler
 - Native macOS-varsler og valgfri IRC-varsellyd
 - Lokal UTF-8-logging av kanaler og private samtaler
+- Lokal kanalhistorikk med diskrete markeringer for ny økt og reconnect
+- Automatisk gjenoppretting av åpne kanaler, private samtaler og aktiv samtale
 - Registrering av innkommende DCC SEND-tilbud
 
 ## Installere testversjonen
@@ -33,7 +37,7 @@ Dersom Gatekeeper blokkerer første oppstart, kan du høyreklikke på MacRelay o
 DMG SHA-256:
 
 ```text
-5e0b05c1a3c7a9e7425ed83afa9ba60aa9e6cc1b618187c44ed25721f98386d3
+6703ba175449bacc7012fd2fa51b801c49f4663c22edb4d29e3932bb28c03526
 ```
 
 ## Skjermbilder
@@ -90,4 +94,5 @@ Logger lagres lokalt under:
 ## Kjente begrensninger
 
 - DCC SEND-tilbud oppdages og vises, men direkte filoverføring er ikke implementert ennå.
+- MacRelay bruker én aktiv IRC-servertilkobling om gangen.
 - Distribusjonsbygget i `dist/` er ment for testing og er ikke notarized av Apple.

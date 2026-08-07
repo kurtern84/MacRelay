@@ -456,7 +456,20 @@ struct ServerSettingsView: View {
 
             Section("Automatisk tilkobling") {
                 TextField("Kanaler, separert med komma", text: $store.configuration.autoJoinChannels)
+                Toggle("Gjenopprett forrige økt ved oppstart", isOn: $store.restorePreviousSession)
                 Text("Eksempel: #swift, #macos").font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Automatisk away") {
+                Toggle("Sett meg som away automatisk", isOn: $store.configuration.autoAwayEnabled)
+                Picker("Inaktivitet", selection: $store.configuration.autoAwayMinutes) {
+                    ForEach([5, 10, 15, 30, 60], id: \.self) { minutes in
+                        Text("\(minutes) minutter").tag(minutes)
+                    }
+                }
+                .disabled(!store.configuration.autoAwayEnabled)
+                TextField("Away-melding", text: $store.configuration.autoAwayMessage)
+                    .disabled(!store.configuration.autoAwayEnabled)
             }
 
             Section("Logger og varsling") {

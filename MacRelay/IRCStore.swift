@@ -1,8 +1,18 @@
 import AppKit
+import CoreGraphics
 import Foundation
 import Network
 import SwiftUI
 import UserNotifications
+
+private struct PersistedIRCSession: Codable {
+    let profileID: UUID
+    let openChannels: [String]
+    let joinedChannels: [String]
+    let openQueries: [String]
+    let selectedConversationID: String?
+    let shouldConnect: Bool
+}
 
 @MainActor
 final class IRCStore: ObservableObject {
@@ -20,6 +30,7 @@ final class IRCStore: ObservableObject {
     @Published var whoisNickname = ""
     @Published var inputText = ""
     @Published var incomingDCCOffer: DCCOffer?
+    @Published var restorePreviousSession: Bool
 
     private let connection = IRCConnection()
     private let logManager = LogManager()
@@ -27,16 +38,37 @@ final class IRCStore: ObservableObject {
     private let selectedProfileKey = "MacRelay.selectedProfile.v1"
     private let legacyConfigurationKey = "MacRelay.serverConfiguration.v1"
     private let ignoredNicksKey = "MacRelay.ignoredNicks.v1"
+    private static let sessionKey = "MacRelay.session.v1"
+    private static let restoreSessionKey = "MacRelay.restorePreviousSession.v1"
     private var currentNickname = ""
     private var intentionalDisconnect = false
     private var reconnectTask: Task<Void, Never>?
     private var reconnectAttempt = 0
     private var channelsToRestore: Set<String> = []
     private var ignoredNicks: Set<String> = []
+    private var sleepObserver: NSObjectProtocol?
+    private var wakeObserver: NSObjectProtocol?
+    private var idleMonitorTask: Task<Void, Never>?
+    private var isSystemSleeping = false
+    private var shouldReconnectAfterWake = false
+    private var isReconnectInProgress = false
+    private var isAutoAway = false
+    private var restoredSelectionID: String?
+    private var pendingRestoredChannelIDs: Set<String> = []
+    private var restoreSelectionTask: Task<Void, Never>?
 
     init() {
+        let defaults = UserDefaults.standard
+        let shouldRestorePreviousSession = defaults.object(forKey: Self.restoreSessionKey) == nil
+            ? true
+            : defaults.bool(forKey: Self.restoreSessionKey)
+        restorePreviousSession = shouldRestorePreviousSession
+        let savedSession = shouldRestorePreviousSession
+            ? defaults.data(forKey: Self.sessionKey).flatMap { try? JSONDecoder().decode(PersistedIRCSession.self, from: $0) }
+            : nil
+
         let savedProfiles: [ServerConfiguration]
-        if let data = UserDefaults.standard.data(forKey: profilesKey),
+        if let data = defaults.data(forKey: profilesKey),
            let decoded = try? JSONDecoder().decode([ServerConfiguration].self, from: data),
            !decoded.isEmpty {
             savedProfiles = decoded
@@ -48,14 +80,20 @@ final class IRCStore: ObservableObject {
         }
 
         profiles = savedProfiles
-        UserDefaults.standard.removeObject(forKey: legacyConfigurationKey)
-        let selectedID = UserDefaults.standard.string(forKey: selectedProfileKey).flatMap(UUID.init(uuidString:))
-        configuration = savedProfiles.first(where: { $0.id == selectedID }) ?? savedProfiles[0]
+        defaults.removeObject(forKey: legacyConfigurationKey)
+        let selectedID = defaults.string(forKey: selectedProfileKey).flatMap(UUID.init(uuidString:))
+        let restoredProfileID = savedSession.flatMap { session in
+            savedProfiles.contains(where: { $0.id == session.profileID }) ? session.profileID : nil
+        }
+        configuration = savedProfiles.first(where: { $0.id == restoredProfileID ?? selectedID }) ?? savedProfiles[0]
         nickServPassword = KeychainStore.password(for: configuration.id)
-        ignoredNicks = Set(UserDefaults.standard.stringArray(forKey: ignoredNicksKey) ?? [])
+        ignoredNicks = Set(defaults.stringArray(forKey: ignoredNicksKey) ?? [])
 
         ensureConversation(id: serverID, name: configuration.name, kind: .server)
         selectedConversationID = serverID
+        if let savedSession, savedSession.profileID == configuration.id {
+            restoreWorkspace(from: savedSession)
+        }
 
         connection.onLine = { [weak self] line in
             Task { @MainActor in self?.handle(rawLine: line) }
@@ -66,6 +104,36 @@ final class IRCStore: ObservableObject {
         connection.onUnexpectedClose = { [weak self] in
             Task { @MainActor in self?.handleUnexpectedDisconnect("Forbindelsen ble lukket av serveren.") }
         }
+
+        let workspaceNotifications = NSWorkspace.shared.notificationCenter
+        sleepObserver = workspaceNotifications.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.handleSystemSleep() }
+        }
+        wakeObserver = workspaceNotifications.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.handleSystemWake() }
+        }
+        startIdleMonitor()
+        if savedSession?.shouldConnect == true {
+            Task { @MainActor [weak self] in
+                await Task.yield()
+                self?.connect()
+            }
+        }
+    }
+
+    deinit {
+        idleMonitorTask?.cancel()
+        restoreSelectionTask?.cancel()
+        if let sleepObserver { NSWorkspace.shared.notificationCenter.removeObserver(sleepObserver) }
+        if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
     }
 
     var selectedConversation: Conversation? {
@@ -79,6 +147,11 @@ final class IRCStore: ObservableObject {
     func saveConfiguration() {
         configuration.name = configuration.name.trimmingCharacters(in: .whitespacesAndNewlines)
         if configuration.name.isEmpty { configuration.name = configuration.host }
+        if ![5, 10, 15, 30, 60].contains(configuration.autoAwayMinutes) {
+            configuration.autoAwayMinutes = 15
+        }
+        configuration.autoAwayMessage = configuration.autoAwayMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        if configuration.autoAwayMessage.isEmpty { configuration.autoAwayMessage = "Ikke ved Mac-en" }
         if let index = profiles.firstIndex(where: { $0.id == configuration.id }) {
             profiles[index] = configuration
         } else {
@@ -94,6 +167,9 @@ final class IRCStore: ObservableObject {
         if configuration.notifyOnMention {
             UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         }
+        UserDefaults.standard.set(restorePreviousSession, forKey: Self.restoreSessionKey)
+        updateAutoAwayState()
+        saveSessionState()
     }
 
     func selectProfile(_ id: UUID) {
@@ -104,6 +180,7 @@ final class IRCStore: ObservableObject {
         nickServPassword = KeychainStore.password(for: id)
         UserDefaults.standard.set(id.uuidString, forKey: selectedProfileKey)
         mutateConversation(id: serverID) { $0.name = profile.name }
+        saveSessionState()
     }
 
     func addProfile() {
@@ -137,6 +214,7 @@ final class IRCStore: ObservableObject {
         reconnectAttempt = 0
         reconnectTask?.cancel()
         reconnectTask = nil
+        shouldReconnectAfterWake = false
         startConnection(isReconnect: false)
     }
 
@@ -146,6 +224,8 @@ final class IRCStore: ObservableObject {
         reconnectTask = nil
         connection.disconnect()
         connectionState = .disconnected
+        isAutoAway = false
+        markAllChannelsDisconnected()
         intentionalDisconnect = false
         appendStatus("Kobler til serveren på nytt …")
         startConnection(isReconnect: true)
@@ -155,8 +235,10 @@ final class IRCStore: ObservableObject {
         guard connectionState == .disconnected, !configuration.host.isEmpty else { return }
         saveConfiguration()
         intentionalDisconnect = false
+        isReconnectInProgress = isReconnect
         currentNickname = configuration.nickname
         connectionState = .connecting
+        saveSessionState()
         let prefix = isReconnect ? "Kobler til igjen" : "Kobler til"
         appendStatus("\(prefix) \(configuration.host):\(configuration.port)\(configuration.useTLS ? " med TLS" : "") …")
         connection.connect(
@@ -169,6 +251,10 @@ final class IRCStore: ObservableObject {
 
     func disconnect() {
         intentionalDisconnect = true
+        shouldReconnectAfterWake = false
+        isReconnectInProgress = false
+        isAutoAway = false
+        clearRestoredSelection()
         reconnectTask?.cancel()
         reconnectTask = nil
         reconnectAttempt = 0
@@ -177,6 +263,7 @@ final class IRCStore: ObservableObject {
         connectionState = .disconnected
         markAllChannelsDisconnected()
         appendStatus("Koblet fra serveren.")
+        saveSessionState()
     }
 
     func selectConversation(_ id: String) {
@@ -189,6 +276,10 @@ final class IRCStore: ObservableObject {
             $0.unreadCount = 0
             $0.mentionCount = 0
         }
+        if let restoredSelectionID, restoredSelectionID != id {
+            clearRestoredSelection()
+        }
+        saveSessionState()
     }
 
     func joinChannel() {
@@ -220,8 +311,14 @@ final class IRCStore: ObservableObject {
     func closeConversation(_ id: String) {
         guard id != serverID, let conversation = conversations.first(where: { $0.id == id }) else { return }
         if conversation.kind == .channel, conversation.isJoined, connectionState == .connected { part(conversation) }
+        if conversation.kind == .channel {
+            channelsToRestore = Set(channelsToRestore.filter {
+                $0.caseInsensitiveCompare(conversation.name) != .orderedSame
+            })
+        }
         conversations.removeAll { $0.id == id }
         if selectedConversationID == id { selectedConversationID = serverID }
+        saveSessionState()
     }
 
     func openQuery(with nickname: String) {
@@ -367,12 +464,16 @@ final class IRCStore: ObservableObject {
             if values.count == 2 { sendRaw("NOTICE \(values[0]) :\(values[1])") }
         case "quit":
             intentionalDisconnect = true
+            shouldReconnectAfterWake = false
+            isReconnectInProgress = false
+            isAutoAway = false
             reconnectTask?.cancel()
             sendRaw("QUIT :\(argument.isEmpty ? "MacRelay avsluttes" : argument)")
             connection.disconnect()
             connectionState = .disconnected
             markAllChannelsDisconnected()
             appendStatus("Koblet fra serveren.")
+            saveSessionState()
         case "raw", "quote":
             if !argument.isEmpty { sendRaw(argument) }
         case "clear":
@@ -439,15 +540,19 @@ final class IRCStore: ObservableObject {
 
     private func handleUnexpectedDisconnect(_ message: String) {
         guard !intentionalDisconnect else { return }
+        if connectionState == .disconnected, reconnectTask != nil { return }
         channelsToRestore.formUnion(conversations.filter { $0.kind == .channel && $0.isJoined }.map(\.name))
         connectionState = .disconnected
+        isAutoAway = false
         markAllChannelsDisconnected()
+        if isSystemSleeping { return }
         appendStatus(message, kind: .error)
         scheduleReconnect()
+        saveSessionState()
     }
 
     private func scheduleReconnect() {
-        guard reconnectTask == nil, !intentionalDisconnect else { return }
+        guard reconnectTask == nil, !intentionalDisconnect, !isSystemSleeping else { return }
         let delays = [2, 5, 10, 20, 30, 60]
         let delay = delays[min(reconnectAttempt, delays.count - 1)]
         reconnectAttempt += 1
@@ -477,10 +582,13 @@ final class IRCStore: ObservableObject {
         case "CAP":
             if message.parameters.contains("LS") { sendRaw("CAP END") }
         case "001":
+            let completedReconnect = isReconnectInProgress
             connectionState = .connected
             reconnectTask?.cancel()
             reconnectTask = nil
             reconnectAttempt = 0
+            isReconnectInProgress = false
+            isAutoAway = false
             currentNickname = message.parameters.first ?? configuration.nickname
             appendStatus("Tilkoblet som \(currentNickname).")
             if !nickServPassword.isEmpty {
@@ -488,8 +596,19 @@ final class IRCStore: ObservableObject {
                 appendStatus("Sendte identifisering til NickServ.")
             }
             let channels = Set(configuration.channels).union(channelsToRestore)
+            if completedReconnect { appendReconnectSeparators(for: channels) }
             channels.forEach { sendRaw("JOIN \($0)") }
             channelsToRestore.removeAll()
+            updateAutoAwayState()
+            if restoredSelectionID != nil {
+                pendingRestoredChannelIDs = Set(channels.map { conversationID(for: $0) })
+                if pendingRestoredChannelIDs.isEmpty {
+                    clearRestoredSelection()
+                } else {
+                    scheduleRestoredSelectionCleanup()
+                }
+            }
+            saveSessionState()
         case "433":
             if currentNickname.caseInsensitiveCompare(configuration.nickname) == .orderedSame,
                !configuration.alternateNickname.isEmpty {
@@ -554,9 +673,11 @@ final class IRCStore: ObservableObject {
         let conversationName = target.caseInsensitiveCompare(currentNickname) == .orderedSame ? sender : target
         let id = conversationID(for: conversationName)
         let kind: ConversationKind = isChannel(conversationName) ? .channel : .query
+        let isNewConversation = !conversations.contains(where: { $0.id == id })
         ensureConversation(id: id, name: conversationName, kind: kind)
         let mention = kind == .channel && containsCurrentNick(text)
         appendMessage(to: id, ChatMessage(sender: sender, text: text, kind: isAction ? .action : .normal, isMention: mention))
+        if isNewConversation { saveSessionState() }
     }
 
     private func handleNotice(_ message: IRCMessage) {
@@ -565,8 +686,10 @@ final class IRCStore: ObservableObject {
         let text = message.parameters.last ?? ""
         let target = message.parameters.first ?? ""
         let id = target.caseInsensitiveCompare(currentNickname) == .orderedSame ? conversationID(for: sender) : serverID
+        let isNewQuery = id != serverID && !conversations.contains(where: { $0.id == id })
         if id != serverID { ensureConversation(id: id, name: sender, kind: .query) }
         appendMessage(to: id, ChatMessage(sender: sender, text: text, kind: .notice))
+        if isNewQuery { saveSessionState() }
     }
 
     private func handleJoin(_ message: IRCMessage) {
@@ -576,7 +699,13 @@ final class IRCStore: ObservableObject {
         if nick.caseInsensitiveCompare(currentNickname) == .orderedSame {
             mutateConversation(id: id) { $0.isJoined = true }
             appendEvent("Du ble med i \(channel).", to: id)
-            selectConversation(id)
+            if restoredSelectionID == nil {
+                selectConversation(id)
+            } else {
+                pendingRestoredChannelIDs.remove(id)
+                if pendingRestoredChannelIDs.isEmpty { clearRestoredSelection() }
+                saveSessionState()
+            }
         } else {
             addUser(IRCUser(nickname: nick, prefix: nil), to: id)
             appendEvent("\(nick) ble med i kanalen.", to: id)
@@ -590,6 +719,7 @@ final class IRCStore: ObservableObject {
         if nick.caseInsensitiveCompare(currentNickname) == .orderedSame {
             mutateConversation(id: id) { $0.isJoined = false }
             appendEvent("Du forlot \(channel)\(reason).", to: id)
+            saveSessionState()
         } else {
             removeUser(nick, from: id)
             appendEvent("\(nick) forlot kanalen\(reason).", to: id)
@@ -644,6 +774,7 @@ final class IRCStore: ObservableObject {
         removeUser(nickname, from: id)
         if nickname.caseInsensitiveCompare(currentNickname) == .orderedSame {
             mutateConversation(id: id) { $0.isJoined = false }
+            saveSessionState()
         }
         appendEvent("\(nickname) ble kastet ut av \(message.nickname ?? "serveren"): \(reason)", to: id)
     }
@@ -704,7 +835,18 @@ final class IRCStore: ObservableObject {
 
     private func ensureConversation(id: String, name: String, kind: ConversationKind) {
         guard !conversations.contains(where: { $0.id == id }) else { return }
-        conversations.append(Conversation(id: id, name: name, kind: kind))
+        var conversation = Conversation(id: id, name: name, kind: kind)
+        if kind == .channel {
+            let history = logManager.recentMessages(
+                serverName: configuration.name,
+                conversationName: name
+            )
+            if !history.isEmpty {
+                conversation.messages = history
+                conversation.messages.append(ChatMessage(text: "──── Ny økt ────", kind: .event))
+            }
+        }
+        conversations.append(conversation)
     }
 
     private func mutateConversation(id: String, change: (inout Conversation) -> Void) {
@@ -718,6 +860,22 @@ final class IRCStore: ObservableObject {
 
     private func appendEvent(_ text: String, to id: String) {
         appendMessage(to: id, ChatMessage(text: text, kind: .event))
+    }
+
+    private func appendLocalEvent(_ text: String, to id: String) {
+        guard let index = conversations.firstIndex(where: { $0.id == id }) else { return }
+        conversations[index].messages.append(ChatMessage(text: text, kind: .event))
+        if conversations[index].messages.count > 2_000 { conversations[index].messages.removeFirst(200) }
+    }
+
+    private func appendReconnectSeparators(for channels: Set<String>) {
+        let channelIDs = Set(channels.map { conversationID(for: $0) })
+        let conversationIDs = conversations
+            .filter { $0.kind == .channel && channelIDs.contains($0.id) }
+            .map(\.id)
+        for id in conversationIDs {
+            appendLocalEvent("──── Reconnect ────", to: id)
+        }
     }
 
     private func appendMessage(to id: String, _ message: ChatMessage) {
@@ -784,6 +942,150 @@ final class IRCStore: ObservableObject {
             conversation.users[index] = IRCUser(nickname: current.nickname, prefix: adding ? prefix : (current.prefix == prefix ? nil : current.prefix))
             conversation.users.sort(by: userSort)
         }
+    }
+
+    private func restoreWorkspace(from session: PersistedIRCSession) {
+        for channel in session.openChannels {
+            ensureConversation(id: conversationID(for: channel), name: channel, kind: .channel)
+        }
+        for nickname in session.openQueries {
+            ensureConversation(id: conversationID(for: nickname), name: nickname, kind: .query)
+        }
+
+        channelsToRestore = Set(session.joinedChannels)
+        if let selectedID = session.selectedConversationID,
+           conversations.contains(where: { $0.id == selectedID }) {
+            selectedConversationID = selectedID
+            restoredSelectionID = selectedID
+        }
+    }
+
+    private func saveSessionState() {
+        let openChannels = conversations
+            .filter { $0.kind == .channel }
+            .map(\.name)
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        let joinedChannels = Set(
+            conversations.filter { $0.kind == .channel && $0.isJoined }.map(\.name)
+        )
+        .union(channelsToRestore)
+        .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        let openQueries = conversations
+            .filter { $0.kind == .query }
+            .map(\.name)
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        let shouldConnect = !intentionalDisconnect
+            && (connectionState != .disconnected || reconnectTask != nil || shouldReconnectAfterWake)
+        let session = PersistedIRCSession(
+            profileID: configuration.id,
+            openChannels: openChannels,
+            joinedChannels: joinedChannels,
+            openQueries: openQueries,
+            selectedConversationID: selectedConversationID,
+            shouldConnect: shouldConnect
+        )
+        if let data = try? JSONEncoder().encode(session) {
+            UserDefaults.standard.set(data, forKey: Self.sessionKey)
+        }
+    }
+
+    private func scheduleRestoredSelectionCleanup() {
+        restoreSelectionTask?.cancel()
+        restoreSelectionTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.clearRestoredSelection()
+        }
+    }
+
+    private func clearRestoredSelection() {
+        restoreSelectionTask?.cancel()
+        restoreSelectionTask = nil
+        restoredSelectionID = nil
+        pendingRestoredChannelIDs.removeAll()
+    }
+
+    private func handleSystemSleep() {
+        guard !isSystemSleeping else { return }
+        isSystemSleeping = true
+        shouldReconnectAfterWake = !intentionalDisconnect
+            && (connectionState != .disconnected || reconnectTask != nil)
+        if shouldReconnectAfterWake {
+            channelsToRestore.formUnion(
+                conversations.filter { $0.kind == .channel && $0.isJoined }.map(\.name)
+            )
+        }
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        saveSessionState()
+    }
+
+    private func handleSystemWake() {
+        guard isSystemSleeping else { return }
+        isSystemSleeping = false
+        guard shouldReconnectAfterWake, !intentionalDisconnect else {
+            shouldReconnectAfterWake = false
+            return
+        }
+
+        shouldReconnectAfterWake = false
+        channelsToRestore.formUnion(
+            conversations.filter { $0.kind == .channel && $0.isJoined }.map(\.name)
+        )
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        connection.disconnect()
+        connectionState = .disconnected
+        isAutoAway = false
+        reconnectAttempt = 0
+        markAllChannelsDisconnected()
+        appendStatus("Tilkoblingen ble brutt under dvale. Kobler til igjen …", kind: .notice)
+        scheduleReconnect()
+        saveSessionState()
+    }
+
+    private func startIdleMonitor() {
+        idleMonitorTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                guard !Task.isCancelled else { return }
+                self?.updateAutoAwayState()
+            }
+        }
+    }
+
+    private func updateAutoAwayState() {
+        guard !isSystemSleeping, connectionState == .connected else {
+            if connectionState != .connected { isAutoAway = false }
+            return
+        }
+
+        guard configuration.autoAwayEnabled else {
+            if isAutoAway {
+                clearAutoAway()
+            }
+            return
+        }
+
+        let idleSeconds = CGEventSource.secondsSinceLastEventType(
+            .combinedSessionState,
+            eventType: .null
+        )
+        guard idleSeconds.isFinite, idleSeconds >= 0 else { return }
+        let threshold = Double(configuration.autoAwayMinutes * 60)
+
+        if idleSeconds >= threshold, !isAutoAway {
+            connection.send("AWAY :\(configuration.autoAwayMessage)")
+            isAutoAway = true
+        } else if idleSeconds < threshold, isAutoAway {
+            clearAutoAway()
+        }
+    }
+
+    private func clearAutoAway() {
+        connection.send("AWAY")
+        isAutoAway = false
+        appendStatus("Du er ikke lenger markert som away.", kind: .notice)
     }
 
     private func markAllChannelsDisconnected() {
