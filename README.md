@@ -1,82 +1,175 @@
 # MacRelay
 
-MacRelay er en klassisk IRC-klient for macOS, bygget i Swift og SwiftUI. Målet er en enkel, native Mac-opplevelse med følelsen fra tradisjonelle IRC-klienter – uten et Discord-lignende grensesnitt.
+MacRelay er en klassisk IRC-klient for macOS, bygget i Swift og SwiftUI.
+
+Målet er en enkel, rask og helt native Mac-opplevelse som gjenskaper følelsen av tradisjonelle IRC-klienter – uten et Discord-lignende grensesnitt eller tunge rammeverk.
+
+MacRelay fokuserer på moderne IRCv3-støtte, sømløs ZNC-integrasjon og en klient som føles hjemme på macOS.
 
 [Last ned MacRelay som DMG](dist/MacRelay.dmg)
 
-> **Testversjon:** Den vedlagte appen er ikke notarized av Apple. macOS kan derfor be deg bekrefte åpning av appen. Last bare ned og åpne programmet dersom du stoler på denne kildekoden og utgiveren.
+> **Testversjon**
+>
+> Den vedlagte appen er ikke notarized av Apple. macOS kan derfor be deg bekrefte åpning av appen. Last bare ned og åpne programmet dersom du stoler på denne kildekoden og utgiveren.
 
 ![MacRelay kanalvisning](docs/screenshots/main-chat.png)
 
-## Funksjoner
+---
+
+# Hvorfor MacRelay?
+
+MacRelay er laget for brukere som ønsker en moderne, native IRC-klient uten å gi slipp på den klassiske IRC-opplevelsen.
+
+Fokus er på:
+
+- Native SwiftUI-grensesnitt
+- Moderne IRCv3-støtte
+- Sømløs ZNC-integrasjon
+- Lokal historikk og logging
+- Rask oppstart
+- Ingen Electron
+- Ingen abonnement
+- Bygget eksklusivt for macOS
+
+---
+
+# Nøkkelfunksjoner
 
 - IRC over vanlig TCP eller TLS
 - Favorittservere og flere serverprofiler
 - Automatisk tilkobling og kanal-join
-- IRC PASS for ZNC og passordbeskyttede IRC-servere, lagret i macOS Keychain
-- Automatisk ZNC-gjenkjenning og optimal IRCv3-forhandling
-- ZNC-playback med nøyaktig `server-time`, deduplisering og støtte for flere MacRelay-klienter
+- IRC PASS for ZNC og passordbeskyttede IRC-servere (lagret i macOS Keychain)
+- Automatisk ZNC-gjenkjenning
+- Automatisk IRCv3 capability-forhandling
+- ZNC-playback med nøyaktig `server-time`
+- Automatisk deduplisering av replayede meldinger
+- Sømløs bruk av flere MacRelay-klienter mot samme ZNC-instans
 - Robust reconnect etter macOS-dvale og midlertidige nettverksbrudd
-- Automatisk away basert på systemets inaktivitetstid, eller fast away ved tilkobling
-- Alternativt nick og separat NickServ-passord lagret i macOS Keychain
-- Kanal-topic, klassisk brukerstatus (`@` og `+`) og sortert brukerliste
-- Private samtaler, WHOIS og ignoreringsliste
+- Automatisk Away basert på systemets inaktivitetstid
+- Fast Away ved tilkobling (valgfritt)
+- Alternativt nick
+- Separat NickServ-passord lagret i macOS Keychain
+- Kanal-topic
+- Klassisk brukerstatus (`@`, `%`, `+`)
+- Sortert brukerliste
+- Private samtaler
+- WHOIS
+- Ignoreringsliste
 - Diskré markering av uleste meldinger og omtaler
-- Native macOS-varsler og valgfri IRC-varsellyd
+- Native macOS-varsler
+- Valgfri IRC-varsellyd
 - Lokal UTF-8-logging av kanaler og private samtaler
-- Lokal kanalhistorikk med diskrete markeringer for ny økt og reconnect
-- Automatisk gjenoppretting av åpne kanaler, private samtaler og aktiv samtale
+- Lokal kanalhistorikk
+- Diskrete markeringer for ny økt og reconnect
+- Automatisk gjenoppretting av:
+  - server
+  - åpne kanaler
+  - private samtaler
+  - aktiv samtale
 - Registrering av innkommende DCC SEND-tilbud
 
-## Installere testversjonen
+---
 
-1. Last ned [`MacRelay.dmg`](dist/MacRelay.dmg).
+# Installere testversjonen
+
+1. Last ned [`MacRelay.dmg`](dist/MacRelay.dmg)
 2. Åpne DMG-filen.
 3. Dra **MacRelay** til **Programmer / Applications**.
 4. Start MacRelay fra Programmer-mappen.
 
-Dersom Gatekeeper blokkerer første oppstart, kan du høyreklikke på MacRelay og velge **Åpne**, eller godkjenne appen under **Systeminnstillinger → Personvern og sikkerhet**.
+Hvis Gatekeeper blokkerer første oppstart, kan du:
 
-DMG SHA-256:
+- høyreklikke på MacRelay og velge **Åpne**
+- eller godkjenne appen under:
+
+**Systeminnstillinger → Personvern og sikkerhet**
+
+### SHA-256
 
 ```text
 b5ee5ead00fdd43740929e88dbaf8d6ccbc50a63414d1d502e518f6242ca58c6
 ```
 
-## ZNC
+---
 
-Bruk feltet **IRC PASS (valgfritt)** for ZNC-passordet, for eksempel `bruker/nettverk:passord`. IRC PASS og NickServ-passord er separate og lagres i hver sin oppføring i macOS Keychain.
+# ZNC
 
-MacRelay oppdager ZNC automatisk gjennom dokumenterte IRCv3-capabilities. Når ZNC tilbyr dem, aktiveres `server-time`, `echo-message` og `znc.in/self-message`. Dermed beholdes riktige tidsstempler og egne meldinger sendt fra en annen MacRelay-klient vises uten lokale duplikater.
+MacRelay har innebygget støtte for ZNC.
 
-For samtidige klienter må **MultiClients** være tillatt på ZNC-serveren. MacRelay kobler bare klientvinduet fra og avslutter ikke IRC-økten som ZNC holder åpen mot nettverket.
+Bruk feltet **IRC PASS (valgfritt)** med formatet:
 
-## Skjermbilder
+```text
+bruker/nettverk:passord
+```
 
-### Native IRC-meny
+IRC PASS og NickServ-passord lagres separat i macOS Keychain.
+
+MacRelay oppdager ZNC automatisk gjennom dokumenterte IRCv3-capabilities.
+
+Ingen egen «ZNC-modus» trenger å aktiveres.
+
+Når ZNC tilbyr relevante capabilities aktiveres automatisk:
+
+- `server-time`
+- `echo-message`
+- `znc.in/self-message`
+
+Dette gir:
+
+- korrekte tidsstempler på playback
+- deduplisering av meldinger
+- egne meldinger sendt fra andre MacRelay-klienter
+- sømløs bruk av flere Mac-er
+
+For å bruke flere MacRelay-installasjoner samtidig må ZNC-brukeren ha **MultiClients** aktivert.
+
+Da kan flere Mac-er dele den samme IRC-tilkoblingen uten å ende opp med alternativt nick.
+
+MacRelay kobler kun klientvinduet fra. Selve IRC-økten holdes levende av ZNC.
+
+---
+
+# Skjermbilder
+
+## Kanalvisning
+
+![MacRelay kanalvisning](docs/screenshots/main-chat.png)
+
+## Native IRC-meny
 
 ![MacRelay IRC-meny](docs/screenshots/irc-menu.png)
 
-### Server og identitet
+## Server og identitet
 
-| Serverinnstillinger | Identitetsinnstillinger |
+| Server | Identitet |
 | --- | --- |
-| ![Serverinnstillinger](docs/screenshots/server-settings.png) | ![Identitetsinnstillinger](docs/screenshots/identity-settings.png) |
+| ![Server](docs/screenshots/server-settings.png) | ![Identitet](docs/screenshots/identity-settings.png) |
 
-### Logging og varsling
+## Logging og varsling
 
-![Logging og varsling](docs/screenshots/logging-settings.png)
+![Logging](docs/screenshots/logging-settings.png)
 
-## Bygge fra kildekode
+---
+
+# Bygge fra kildekode
 
 1. Klon repoet.
 2. Åpne `MacRelay.xcodeproj` i Xcode.
-3. Velg `MacRelay`-scheme og **My Mac**.
-4. Bygg og kjør med `⌘R`.
+3. Velg **MacRelay**-scheme.
+4. Velg **My Mac**.
+5. Bygg og kjør med:
 
-Prosjektets deployment target er macOS 14.0. Appen bygges som Universal Binary for Apple Silicon og Intel når begge arkitekturer er valgt i Xcode.
+```text
+⌘R
+```
 
-## IRC-kommandoer
+Krever macOS 14 eller nyere.
+
+Prosjektet bygger som Universal Binary når både Apple Silicon og Intel er valgt i Xcode.
+
+---
+
+# IRC-kommandoer
 
 MacRelay støtter blant annet:
 
@@ -94,7 +187,9 @@ MacRelay støtter blant annet:
 /quit [melding]
 ```
 
-## Logger
+---
+
+# Logger
 
 Logger lagres lokalt under:
 
@@ -102,8 +197,16 @@ Logger lagres lokalt under:
 ~/Library/Application Support/MacRelay/Logs/
 ```
 
-## Kjente begrensninger
+---
 
-- DCC SEND-tilbud oppdages og vises, men direkte filoverføring er ikke implementert ennå.
-- MacRelay bruker én aktiv IRC-servertilkobling om gangen.
+# Kjente begrensninger
+
+- DCC SEND-tilbud oppdages og vises, men direkte filoverføring er foreløpig ikke implementert.
+- Én aktiv IRC-server om gangen. Flere serverprofiler støttes, men bare én servertilkobling kan være aktiv samtidig.
 - Distribusjonsbygget i `dist/` er ment for testing og er ikke notarized av Apple.
+
+---
+
+# Lisens
+
+Dette prosjektet er publisert som åpen kildekode. Se prosjektets lisensfil for detaljer.
