@@ -20,7 +20,7 @@ enum ConversationKind: String, Codable {
     case query
 }
 
-enum MessageKind {
+enum MessageKind: Equatable {
     case normal
     case action
     case notice
@@ -152,6 +152,16 @@ struct IRCMessage {
     var nickname: String? {
         guard let prefix else { return nil }
         return String(prefix.split(separator: "!", maxSplits: 1).first ?? Substring(prefix))
+    }
+
+    var serverTimestamp: Date? {
+        guard let value = tags["time"] else { return nil }
+
+        let fractionalFormatter = ISO8601DateFormatter()
+        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractionalFormatter.date(from: value) { return date }
+
+        return ISO8601DateFormatter().date(from: value)
     }
 
     static func parse(_ rawLine: String) -> IRCMessage? {

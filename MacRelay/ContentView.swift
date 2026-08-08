@@ -102,7 +102,9 @@ private struct SidebarView: View {
             Divider()
             HStack(spacing: 8) {
                 Circle().fill(stateColor).frame(width: 8, height: 8)
-                Text(store.connectionState.label)
+                Text(store.connectionState == .connected && store.isConnectedViaZNC
+                    ? "Tilkoblet via ZNC"
+                    : store.connectionState.label)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -448,6 +450,10 @@ struct ServerSettingsView: View {
                 TextField("Alternativt kallenavn", text: $store.configuration.alternateNickname)
                 TextField("Brukernavn", text: $store.configuration.username)
                 TextField("Virkelig navn", text: $store.configuration.realName)
+                SecureField("IRC PASS (valgfritt)", text: $store.ircPassword)
+                Text("Sendes som IRC PASS før innlogging. Brukes blant annet av ZNC og IRC-servere som krever serverautentisering.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 SecureField("NickServ-passord (valgfritt)", text: $store.nickServPassword)
                 Text("NickServ-passordet lagres bare i macOS Keychain.")
                     .font(.caption)

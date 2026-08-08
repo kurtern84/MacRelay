@@ -21,6 +21,7 @@ final class IRCStore: ObservableObject {
     @Published var selectedConversationID: String?
     @Published var profiles: [ServerConfiguration] = []
     @Published var configuration: ServerConfiguration
+    @Published var ircPassword = ""
     @Published var nickServPassword = ""
     @Published var showSettings = false
     @Published var showJoinChannel = false
@@ -31,6 +32,7 @@ final class IRCStore: ObservableObject {
     @Published var inputText = ""
     @Published var incomingDCCOffer: DCCOffer?
     @Published var restorePreviousSession: Bool
+    @Published private(set) var isConnectedViaZNC = false
 
     private let connection = IRCConnection()
     private let logManager = LogManager()
@@ -52,6 +54,9 @@ final class IRCStore: ObservableObject {
     private var isSystemSleeping = false
     private var shouldReconnectAfterWake = false
     private var isReconnectInProgress = false
+    private var hasSentRegistration = false
+    private var advertisedCapabilities: Set<String> = []
+    private var enabledCapabilities: Set<String> = []
     private var isAutoAway = false
     private var isStartAway = false
     private var restoredSelectionID: String?
@@ -87,6 +92,7 @@ final class IRCStore: ObservableObject {
             savedProfiles.contains(where: { $0.id == session.profileID }) ? session.profileID : nil
         }
         configuration = savedProfiles.first(where: { $0.id == restoredProfileID ?? selectedID }) ?? savedProfiles[0]
+        ircPassword = KeychainStore.ircPassword(for: configuration.id)
         nickServPassword = KeychainStore.password(for: configuration.id)
         ignoredNicks = Set(defaults.stringArray(forKey: ignoredNicksKey) ?? [])
 
@@ -162,6 +168,7 @@ final class IRCStore: ObservableObject {
             UserDefaults.standard.set(data, forKey: profilesKey)
             UserDefaults.standard.set(configuration.id.uuidString, forKey: selectedProfileKey)
         }
+        KeychainStore.setIRCPassword(ircPassword, for: configuration.id)
         KeychainStore.setPassword(nickServPassword, for: configuration.id)
         mutateConversation(id: serverID) { $0.name = configuration.name }
 
@@ -178,6 +185,7 @@ final class IRCStore: ObservableObject {
               let profile = profiles.first(where: { $0.id == id }) else { return }
         saveConfiguration()
         configuration = profile
+        ircPassword = KeychainStore.ircPassword(for: id)
         nickServPassword = KeychainStore.password(for: id)
         UserDefaults.standard.set(id.uuidString, forKey: selectedProfileKey)
         mutateConversation(id: serverID) { $0.name = profile.name }
@@ -193,6 +201,7 @@ final class IRCStore: ObservableObject {
         profile.autoJoinChannels = ""
         profiles.append(profile)
         configuration = profile
+        ircPassword = ""
         nickServPassword = ""
         saveConfiguration()
     }
@@ -201,8 +210,10 @@ final class IRCStore: ObservableObject {
         guard connectionState == .disconnected, profiles.count > 1 else { return }
         let removedID = configuration.id
         profiles.removeAll { $0.id == removedID }
+        KeychainStore.removeIRCPassword(for: removedID)
         KeychainStore.removePassword(for: removedID)
         configuration = profiles[0]
+        ircPassword = KeychainStore.ircPassword(for: configuration.id)
         nickServPassword = KeychainStore.password(for: configuration.id)
         saveConfiguration()
     }
@@ -223,7 +234,7 @@ final class IRCStore: ObservableObject {
         channelsToRestore = Set(conversations.filter { $0.kind == .channel && $0.isJoined }.map(\.name))
         reconnectTask?.cancel()
         reconnectTask = nil
-        connection.disconnect()
+        connection.disconnect(reason: "manuell reconnect")
         connectionState = .disconnected
         isAutoAway = false
         isStartAway = false
@@ -240,6 +251,10 @@ final class IRCStore: ObservableObject {
         isReconnectInProgress = isReconnect
         currentNickname = configuration.nickname
         connectionState = .connecting
+        hasSentRegistration = false
+        advertisedCapabilities.removeAll()
+        enabledCapabilities.removeAll()
+        isConnectedViaZNC = false
         saveSessionState()
         let prefix = isReconnect ? "Kobler til igjen" : "Kobler til"
         appendStatus("\(prefix) \(configuration.host):\(configuration.port)\(configuration.useTLS ? " med TLS" : "") …")
@@ -262,7 +277,7 @@ final class IRCStore: ObservableObject {
         reconnectTask = nil
         reconnectAttempt = 0
         if connectionState == .connected { sendRaw("QUIT :MacRelay avsluttes") }
-        connection.disconnect()
+        connection.disconnect(reason: "manuell disconnect")
         connectionState = .disconnected
         markAllChannelsDisconnected()
         appendStatus("Koblet fra serveren.")
@@ -418,7 +433,9 @@ final class IRCStore: ObservableObject {
         case "me":
             guard let target = selectedConversation, target.kind != .server, !argument.isEmpty else { return }
             sendRaw("PRIVMSG \(target.name) :\u{1}ACTION \(argument)\u{1}")
-            appendMessage(to: target.id, ChatMessage(sender: currentNickname, text: argument, kind: .action, isOwn: true))
+            if !enabledCapabilities.contains("echo-message") {
+                appendMessage(to: target.id, ChatMessage(sender: currentNickname, text: argument, kind: .action, isOwn: true))
+            }
         case "nick":
             if !argument.isEmpty { sendRaw("NICK \(argument)") }
         case "topic":
@@ -473,7 +490,7 @@ final class IRCStore: ObservableObject {
             isStartAway = false
             reconnectTask?.cancel()
             sendRaw("QUIT :\(argument.isEmpty ? "MacRelay avsluttes" : argument)")
-            connection.disconnect()
+            connection.disconnect(reason: "/quit")
             connectionState = .disconnected
             markAllChannelsDisconnected()
             appendStatus("Koblet fra serveren.")
@@ -510,7 +527,9 @@ final class IRCStore: ObservableObject {
         let id = conversationID(for: target)
         ensureConversation(id: id, name: target, kind: isChannel(target) ? .channel : .query)
         sendRaw("PRIVMSG \(target) :\(text)")
-        appendMessage(to: id, ChatMessage(sender: currentNickname, text: text, isOwn: true))
+        if !enabledCapabilities.contains("echo-message") {
+            appendMessage(to: id, ChatMessage(sender: currentNickname, text: text, isOwn: true))
+        }
     }
 
     private func sendRaw(_ line: String) {
@@ -524,8 +543,18 @@ final class IRCStore: ObservableObject {
     private func handle(connectionState state: NWConnection.State) {
         switch state {
         case .ready:
+            guard !hasSentRegistration else {
+                #if DEBUG
+                print("[MacRelay IRC] STATE ready gjentatt; registrering sendes ikke på nytt")
+                #endif
+                return
+            }
+            hasSentRegistration = true
             connectionState = .connecting
             appendStatus("Nettverkstilkoblingen er opprettet. Registrerer kallenavn …")
+            if !ircPassword.isEmpty {
+                sendRaw("PASS \(ircPassword)")
+            }
             sendRaw("CAP LS 302")
             sendRaw("NICK \(configuration.nickname)")
             sendRaw("USER \(configuration.username) 0 * :\(configuration.realName)")
@@ -585,7 +614,7 @@ final class IRCStore: ObservableObject {
         case "PING":
             if let token = message.parameters.last { sendRaw("PONG :\(token)") }
         case "CAP":
-            if message.parameters.contains("LS") { sendRaw("CAP END") }
+            handleCapabilities(message)
         case "001":
             let completedReconnect = isReconnectInProgress
             connectionState = .connected
@@ -596,7 +625,9 @@ final class IRCStore: ObservableObject {
             isAutoAway = false
             isStartAway = false
             currentNickname = message.parameters.first ?? configuration.nickname
-            appendStatus("Tilkoblet som \(currentNickname).")
+            appendStatus(isConnectedViaZNC
+                ? "Tilkoblet via ZNC som \(currentNickname)."
+                : "Tilkoblet som \(currentNickname).")
             if !nickServPassword.isEmpty {
                 sendRaw("PRIVMSG NickServ :IDENTIFY \(nickServPassword)")
                 appendStatus("Sendte identifisering til NickServ.")
@@ -681,8 +712,17 @@ final class IRCStore: ObservableObject {
         let kind: ConversationKind = isChannel(conversationName) ? .channel : .query
         let isNewConversation = !conversations.contains(where: { $0.id == id })
         ensureConversation(id: id, name: conversationName, kind: kind)
-        let mention = kind == .channel && containsCurrentNick(text)
-        appendMessage(to: id, ChatMessage(sender: sender, text: text, kind: isAction ? .action : .normal, isMention: mention))
+        let isOwn = sender.caseInsensitiveCompare(currentNickname) == .orderedSame
+        let mention = !isOwn && kind == .channel && containsCurrentNick(text)
+        let serverTimestamp = message.serverTimestamp
+        appendMessage(to: id, ChatMessage(
+            timestamp: serverTimestamp ?? Date(),
+            sender: sender,
+            text: text,
+            kind: isAction ? .action : .normal,
+            isOwn: isOwn,
+            isMention: mention
+        ), deduplicateServerTime: serverTimestamp != nil)
         if isNewConversation { saveSessionState() }
     }
 
@@ -694,8 +734,65 @@ final class IRCStore: ObservableObject {
         let id = target.caseInsensitiveCompare(currentNickname) == .orderedSame ? conversationID(for: sender) : serverID
         let isNewQuery = id != serverID && !conversations.contains(where: { $0.id == id })
         if id != serverID { ensureConversation(id: id, name: sender, kind: .query) }
-        appendMessage(to: id, ChatMessage(sender: sender, text: text, kind: .notice))
+        let serverTimestamp = message.serverTimestamp
+        appendMessage(to: id, ChatMessage(
+            timestamp: serverTimestamp ?? Date(),
+            sender: sender,
+            text: text,
+            kind: .notice
+        ), deduplicateServerTime: serverTimestamp != nil)
         if isNewQuery { saveSessionState() }
+    }
+
+    private func handleCapabilities(_ message: IRCMessage) {
+        guard message.parameters.count >= 2 else { return }
+        switch message.parameters[1].uppercased() {
+        case "LS":
+            if let capabilities = message.parameters.last {
+                advertisedCapabilities.formUnion(
+                    capabilities.split(separator: " ").map(capabilityName)
+                )
+            }
+            let hasMore = message.parameters.count >= 4 && message.parameters[2] == "*"
+            guard !hasMore else { return }
+
+            isConnectedViaZNC = advertisedCapabilities.contains { $0.hasPrefix("znc.in/") }
+            var requestedCapabilities: [String] = []
+            if advertisedCapabilities.contains("server-time") {
+                requestedCapabilities.append("server-time")
+            } else if isConnectedViaZNC,
+                      advertisedCapabilities.contains("znc.in/server-time-iso") {
+                requestedCapabilities.append("znc.in/server-time-iso")
+            }
+            if isConnectedViaZNC {
+                requestedCapabilities.append(contentsOf: [
+                    "echo-message",
+                    "znc.in/self-message"
+                ])
+            }
+            let supportedCapabilities = requestedCapabilities.filter(advertisedCapabilities.contains)
+            if supportedCapabilities.isEmpty {
+                sendRaw("CAP END")
+            } else {
+                sendRaw("CAP REQ :\(supportedCapabilities.joined(separator: " "))")
+            }
+        case "ACK":
+            if let capabilities = message.parameters.last {
+                enabledCapabilities.formUnion(
+                    capabilities.split(separator: " ").map(capabilityName)
+                )
+            }
+            sendRaw("CAP END")
+        case "NAK":
+            sendRaw("CAP END")
+        default:
+            break
+        }
+    }
+
+    private func capabilityName(_ token: Substring) -> String {
+        let value = token.drop(while: { $0 == "-" || $0 == "~" || $0 == "=" })
+        return value.split(separator: "=", maxSplits: 1).first.map { $0.lowercased() } ?? ""
     }
 
     private func handleJoin(_ message: IRCMessage) {
@@ -890,11 +987,12 @@ final class IRCStore: ObservableObject {
         }
     }
 
-    private func appendMessage(to id: String, _ message: ChatMessage) {
+    private func appendMessage(to id: String, _ message: ChatMessage, deduplicateServerTime: Bool = false) {
         guard let index = conversations.firstIndex(where: { $0.id == id }) else { return }
+        if deduplicateServerTime, isDuplicateServerTimeMessage(message, in: conversations[index]) { return }
         conversations[index].messages.append(message)
         if conversations[index].messages.count > 2_000 { conversations[index].messages.removeFirst(200) }
-        if selectedConversationID != id {
+        if selectedConversationID != id, !message.isOwn {
             conversations[index].unreadCount += 1
             if message.isMention { conversations[index].mentionCount += 1 }
         }
@@ -914,6 +1012,35 @@ final class IRCStore: ObservableObject {
            selectedConversationID != id,
            (message.isMention || conversations[index].kind == .query) {
             NSSound(named: NSSound.Name("Glass"))?.play()
+        }
+    }
+
+    private func isDuplicateServerTimeMessage(_ message: ChatMessage, in conversation: Conversation) -> Bool {
+        func matches(_ existing: ChatMessage, tolerance: TimeInterval) -> Bool {
+            let sameSender: Bool
+            switch (existing.sender, message.sender) {
+            case let (lhs?, rhs?):
+                sameSender = lhs.caseInsensitiveCompare(rhs) == .orderedSame
+            case (nil, nil):
+                sameSender = true
+            default:
+                sameSender = false
+            }
+            return sameSender
+                && existing.text == message.text
+                && existing.kind == message.kind
+                && abs(existing.timestamp.timeIntervalSince(message.timestamp)) < tolerance
+        }
+
+        if conversation.messages.suffix(300).contains(where: { matches($0, tolerance: 0.001) }) {
+            return true
+        }
+
+        guard let separatorIndex = conversation.messages.firstIndex(where: {
+            $0.sender == nil && $0.text == "──── Ny økt ────"
+        }) else { return false }
+        return conversation.messages[..<separatorIndex].suffix(300).contains {
+            matches($0, tolerance: 1.0)
         }
     }
 
@@ -1046,7 +1173,7 @@ final class IRCStore: ObservableObject {
         )
         reconnectTask?.cancel()
         reconnectTask = nil
-        connection.disconnect()
+        connection.disconnect(reason: "reconnect etter wake")
         connectionState = .disconnected
         isAutoAway = false
         isStartAway = false

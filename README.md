@@ -13,9 +13,12 @@ MacRelay er en klassisk IRC-klient for macOS, bygget i Swift og SwiftUI. Målet 
 - IRC over vanlig TCP eller TLS
 - Favorittservere og flere serverprofiler
 - Automatisk tilkobling og kanal-join
+- IRC PASS for ZNC og passordbeskyttede IRC-servere, lagret i macOS Keychain
+- Automatisk ZNC-gjenkjenning og optimal IRCv3-forhandling
+- ZNC-playback med nøyaktig `server-time`, deduplisering og støtte for flere MacRelay-klienter
 - Robust reconnect etter macOS-dvale og midlertidige nettverksbrudd
 - Automatisk away basert på systemets inaktivitetstid, eller fast away ved tilkobling
-- Alternativt nick og NickServ-passord lagret i macOS Keychain
+- Alternativt nick og separat NickServ-passord lagret i macOS Keychain
 - Kanal-topic, klassisk brukerstatus (`@` og `+`) og sortert brukerliste
 - Private samtaler, WHOIS og ignoreringsliste
 - Diskré markering av uleste meldinger og omtaler
@@ -37,8 +40,16 @@ Dersom Gatekeeper blokkerer første oppstart, kan du høyreklikke på MacRelay o
 DMG SHA-256:
 
 ```text
-a8d5d13b85553ba4ed2ff4deca5e16324f8939188140f0d7738bfdd1a68eaa2f
+b5ee5ead00fdd43740929e88dbaf8d6ccbc50a63414d1d502e518f6242ca58c6
 ```
+
+## ZNC
+
+Bruk feltet **IRC PASS (valgfritt)** for ZNC-passordet, for eksempel `bruker/nettverk:passord`. IRC PASS og NickServ-passord er separate og lagres i hver sin oppføring i macOS Keychain.
+
+MacRelay oppdager ZNC automatisk gjennom dokumenterte IRCv3-capabilities. Når ZNC tilbyr dem, aktiveres `server-time`, `echo-message` og `znc.in/self-message`. Dermed beholdes riktige tidsstempler og egne meldinger sendt fra en annen MacRelay-klient vises uten lokale duplikater.
+
+For samtidige klienter må **MultiClients** være tillatt på ZNC-serveren. MacRelay kobler bare klientvinduet fra og avslutter ikke IRC-økten som ZNC holder åpen mot nettverket.
 
 ## Skjermbilder
 
