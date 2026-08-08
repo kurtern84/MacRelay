@@ -124,7 +124,7 @@ private struct SidebarView: View {
 
     @ViewBuilder
     private func channelMenu(_ conversation: Conversation) -> some View {
-        Button("Forlat kanal", systemImage: "rectangle.portrait.and.arrow.right") { store.part(conversation) }
+        Button("Forlat kanal", systemImage: "rectangle.portrait.and.arrow.right") { store.closeConversation(conversation.id) }
             .disabled(!conversation.isJoined)
         Button("Vis topic", systemImage: "text.quote") {
             store.selectConversation(conversation.id)
@@ -462,6 +462,7 @@ struct ServerSettingsView: View {
 
             Section("Automatisk away") {
                 Toggle("Sett meg som away automatisk", isOn: $store.configuration.autoAwayEnabled)
+                Toggle("Start som away ved tilkobling", isOn: $store.configuration.startAwayOnConnect)
                 Picker("Inaktivitet", selection: $store.configuration.autoAwayMinutes) {
                     ForEach([5, 10, 15, 30, 60], id: \.self) { minutes in
                         Text("\(minutes) minutter").tag(minutes)
@@ -469,7 +470,10 @@ struct ServerSettingsView: View {
                 }
                 .disabled(!store.configuration.autoAwayEnabled)
                 TextField("Away-melding", text: $store.configuration.autoAwayMessage)
-                    .disabled(!store.configuration.autoAwayEnabled)
+                    .disabled(!store.configuration.autoAwayEnabled && !store.configuration.startAwayOnConnect)
+                Text("Start som away overstyrer tidsintervallet og beholdes til valget slås av.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Logger og varsling") {

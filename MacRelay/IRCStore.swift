@@ -53,6 +53,7 @@ final class IRCStore: ObservableObject {
     private var shouldReconnectAfterWake = false
     private var isReconnectInProgress = false
     private var isAutoAway = false
+    private var isStartAway = false
     private var restoredSelectionID: String?
     private var pendingRestoredChannelIDs: Set<String> = []
     private var restoreSelectionTask: Task<Void, Never>?
@@ -225,6 +226,7 @@ final class IRCStore: ObservableObject {
         connection.disconnect()
         connectionState = .disconnected
         isAutoAway = false
+        isStartAway = false
         markAllChannelsDisconnected()
         intentionalDisconnect = false
         appendStatus("Kobler til serveren på nytt …")
@@ -254,6 +256,7 @@ final class IRCStore: ObservableObject {
         shouldReconnectAfterWake = false
         isReconnectInProgress = false
         isAutoAway = false
+        isStartAway = false
         clearRestoredSelection()
         reconnectTask?.cancel()
         reconnectTask = nil
@@ -467,6 +470,7 @@ final class IRCStore: ObservableObject {
             shouldReconnectAfterWake = false
             isReconnectInProgress = false
             isAutoAway = false
+            isStartAway = false
             reconnectTask?.cancel()
             sendRaw("QUIT :\(argument.isEmpty ? "MacRelay avsluttes" : argument)")
             connection.disconnect()
@@ -544,6 +548,7 @@ final class IRCStore: ObservableObject {
         channelsToRestore.formUnion(conversations.filter { $0.kind == .channel && $0.isJoined }.map(\.name))
         connectionState = .disconnected
         isAutoAway = false
+        isStartAway = false
         markAllChannelsDisconnected()
         if isSystemSleeping { return }
         appendStatus(message, kind: .error)
@@ -589,6 +594,7 @@ final class IRCStore: ObservableObject {
             reconnectAttempt = 0
             isReconnectInProgress = false
             isAutoAway = false
+            isStartAway = false
             currentNickname = message.parameters.first ?? configuration.nickname
             appendStatus("Tilkoblet som \(currentNickname).")
             if !nickServPassword.isEmpty {
@@ -717,7 +723,13 @@ final class IRCStore: ObservableObject {
         let id = conversationID(for: channel)
         let reason = message.parameters.count > 1 ? ": \(message.parameters[1])" : ""
         if nick.caseInsensitiveCompare(currentNickname) == .orderedSame {
-            mutateConversation(id: id) { $0.isJoined = false }
+            mutateConversation(id: id) {
+                $0.isJoined = false
+                $0.users.removeAll()
+            }
+            channelsToRestore = Set(channelsToRestore.filter {
+                $0.caseInsensitiveCompare(channel) != .orderedSame
+            })
             appendEvent("Du forlot \(channel)\(reason).", to: id)
             saveSessionState()
         } else {
@@ -1037,6 +1049,7 @@ final class IRCStore: ObservableObject {
         connection.disconnect()
         connectionState = .disconnected
         isAutoAway = false
+        isStartAway = false
         reconnectAttempt = 0
         markAllChannelsDisconnected()
         appendStatus("Tilkoblingen ble brutt under dvale. Kobler til igjen …", kind: .notice)
@@ -1056,20 +1069,39 @@ final class IRCStore: ObservableObject {
 
     private func updateAutoAwayState() {
         guard !isSystemSleeping, connectionState == .connected else {
-            if connectionState != .connected { isAutoAway = false }
-            return
-        }
-
-        guard configuration.autoAwayEnabled else {
-            if isAutoAway {
-                clearAutoAway()
+            if connectionState != .connected {
+                isAutoAway = false
+                isStartAway = false
             }
             return
         }
 
+        if configuration.startAwayOnConnect {
+            if !isStartAway {
+                if !isAutoAway {
+                    connection.send("AWAY :\(configuration.autoAwayMessage)")
+                }
+                isAutoAway = false
+                isStartAway = true
+            }
+            return
+        }
+
+        if isStartAway {
+            clearAwayStatus()
+        }
+
+        guard configuration.autoAwayEnabled else {
+            if isAutoAway {
+                clearAwayStatus()
+            }
+            return
+        }
+
+        guard let anyInputEvent = CGEventType(rawValue: UInt32.max) else { return }
         let idleSeconds = CGEventSource.secondsSinceLastEventType(
             .combinedSessionState,
-            eventType: .null
+            eventType: anyInputEvent
         )
         guard idleSeconds.isFinite, idleSeconds >= 0 else { return }
         let threshold = Double(configuration.autoAwayMinutes * 60)
@@ -1078,13 +1110,14 @@ final class IRCStore: ObservableObject {
             connection.send("AWAY :\(configuration.autoAwayMessage)")
             isAutoAway = true
         } else if idleSeconds < threshold, isAutoAway {
-            clearAutoAway()
+            clearAwayStatus()
         }
     }
 
-    private func clearAutoAway() {
+    private func clearAwayStatus() {
         connection.send("AWAY")
         isAutoAway = false
+        isStartAway = false
         appendStatus("Du er ikke lenger markert som away.", kind: .notice)
     }
 

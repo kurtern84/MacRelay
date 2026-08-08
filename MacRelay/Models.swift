@@ -90,6 +90,7 @@ struct ServerConfiguration: Codable, Equatable, Identifiable {
     var notifyOnMention = false
     var playNotificationSounds = true
     var autoAwayEnabled = false
+    var startAwayOnConnect = false
     var autoAwayMinutes = 15
     var autoAwayMessage = "Ikke ved Mac-en"
 
@@ -97,7 +98,7 @@ struct ServerConfiguration: Codable, Equatable, Identifiable {
         case id, name, host, port, useTLS, nickname, alternateNickname
         case username, realName, autoJoinChannels, allowUntrustedCertificate
         case loggingEnabled, notifyOnMention, playNotificationSounds
-        case autoAwayEnabled, autoAwayMinutes, autoAwayMessage
+        case autoAwayEnabled, startAwayOnConnect, autoAwayMinutes, autoAwayMessage
     }
 
     init() {}
@@ -119,6 +120,7 @@ struct ServerConfiguration: Codable, Equatable, Identifiable {
         notifyOnMention = try values.decodeIfPresent(Bool.self, forKey: .notifyOnMention) ?? false
         playNotificationSounds = try values.decodeIfPresent(Bool.self, forKey: .playNotificationSounds) ?? true
         autoAwayEnabled = try values.decodeIfPresent(Bool.self, forKey: .autoAwayEnabled) ?? false
+        startAwayOnConnect = try values.decodeIfPresent(Bool.self, forKey: .startAwayOnConnect) ?? false
         autoAwayMinutes = try values.decodeIfPresent(Int.self, forKey: .autoAwayMinutes) ?? 15
         autoAwayMessage = try values.decodeIfPresent(String.self, forKey: .autoAwayMessage) ?? "Ikke ved Mac-en"
     }
