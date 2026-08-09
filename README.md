@@ -1,10 +1,10 @@
 # MacRelay
 
-MacRelay er en klassisk IRC-klient for macOS, bygget i Swift og SwiftUI.
+MacRelay er en klassisk IRC-klient for macOS, med en native companion-app for iPhone og iPad, bygget i Swift og SwiftUI.
 
 Målet er en enkel, rask og helt native Mac-opplevelse som gjenskaper følelsen av tradisjonelle IRC-klienter – uten et Discord-lignende grensesnitt eller tunge rammeverk.
 
-MacRelay fokuserer på moderne IRCv3-støtte, sømløs ZNC-integrasjon og en klient som føles hjemme på macOS.
+MacRelay fokuserer på moderne IRCv3-støtte, sømløs ZNC-integrasjon og klienter som føles hjemme på både macOS og iOS.
 
 **Versjon 1.1 · build 2**
 
@@ -31,7 +31,7 @@ Fokus er på:
 - Rask oppstart
 - Ingen Electron
 - Ingen abonnement
-- Bygget eksklusivt for macOS
+- Native macOS-app og egen iOS companion-app
 
 ---
 
@@ -91,7 +91,7 @@ Hvis Gatekeeper blokkerer første oppstart, kan du:
 ### SHA-256
 
 ```text
-961314e36122def7f14abc93034ca1c6563847e50658787d525e3ea2d11f497c
+9b98170fe32c1f9ff7f67e00c338cb319f6f22622e214dcca0f58b02b53f5ecb
 ```
 
 ---
@@ -159,15 +159,17 @@ MacRelay kobler kun klientvinduet fra. Selve IRC-økten holdes levende av ZNC.
 
 1. Klon repoet.
 2. Åpne `MacRelay.xcodeproj` i Xcode.
-3. Velg **MacRelay**-scheme.
-4. Velg **My Mac**.
+3. Velg **MacRelay** for macOS eller **MacRelayiOS** for iPhone/iPad.
+4. Velg riktig Mac, simulator eller fysisk iOS-enhet.
 5. Bygg og kjør med:
 
 ```text
 ⌘R
 ```
 
-Krever macOS 14 eller nyere.
+`MacRelayCore` er det delte kodebiblioteket og bygges automatisk. Det skal ikke startes som en egen app.
+
+Krever macOS 14 eller nyere for Mac-appen og iOS/iPadOS 17 eller nyere for companion-appen.
 
 Prosjektet bygger som Universal Binary når både Apple Silicon og Intel er valgt i Xcode.
 
@@ -208,6 +210,7 @@ Logger lagres lokalt under:
 - DCC SEND-tilbud oppdages og vises, men direkte filoverføring er foreløpig ikke implementert.
 - Én aktiv IRC-server om gangen. Flere serverprofiler støttes, men bare én servertilkobling kan være aktiv samtidig.
 - Distribusjonsbygget i `dist/` er ment for testing og er ikke notarized av Apple.
+- DMG-filen inneholder bare macOS-appen. iOS companion-appen installeres foreløpig fra Xcode; TestFlight kan brukes senere.
 
 ---
 

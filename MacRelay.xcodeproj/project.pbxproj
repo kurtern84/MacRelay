@@ -15,6 +15,12 @@
 		A00000000000000000000045 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000017 /* KeychainStore.swift */; };
 		A00000000000000000000046 /* LogManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000018 /* LogManager.swift */; };
 		A00000000000000000000047 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000019 /* Assets.xcassets */; };
+		A00000000000000000000048 /* MacRelayCore in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000091 /* MacRelayCore */; };
+		B00000000000000000000040 /* MacRelayiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000010 /* MacRelayiOSApp.swift */; };
+		B00000000000000000000041 /* IOSIRCStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000011 /* IOSIRCStore.swift */; };
+		B00000000000000000000042 /* IOSContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000012 /* IOSContentView.swift */; };
+		B00000000000000000000043 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000013 /* Assets.xcassets */; };
+		B00000000000000000000048 /* MacRelayCore in Frameworks */ = {isa = PBXBuildFile; productRef = B00000000000000000000091 /* MacRelayCore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -29,6 +35,12 @@
 		A00000000000000000000018 /* LogManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogManager.swift; sourceTree = "<group>"; };
 		A00000000000000000000019 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A00000000000000000000030 /* MacRelay.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MacRelay.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B00000000000000000000010 /* MacRelayiOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacRelayiOSApp.swift; sourceTree = "<group>"; };
+		B00000000000000000000011 /* IOSIRCStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSIRCStore.swift; sourceTree = "<group>"; };
+		B00000000000000000000012 /* IOSContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSContentView.swift; sourceTree = "<group>"; };
+		B00000000000000000000013 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		B00000000000000000000014 /* MacRelayiOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MacRelayiOS.entitlements; sourceTree = "<group>"; };
+		B00000000000000000000030 /* MacRelayiOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MacRelayiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -36,6 +48,15 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A00000000000000000000048 /* MacRelayCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B00000000000000000000051 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B00000000000000000000048 /* MacRelayCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -46,8 +67,21 @@
 			isa = PBXGroup;
 			children = (
 				A00000000000000000000002 /* MacRelay */,
+				B00000000000000000000002 /* MacRelayiOS */,
 				A00000000000000000000003 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		B00000000000000000000002 /* MacRelayiOS */ = {
+			isa = PBXGroup;
+			children = (
+				B00000000000000000000010 /* MacRelayiOSApp.swift */,
+				B00000000000000000000011 /* IOSIRCStore.swift */,
+				B00000000000000000000012 /* IOSContentView.swift */,
+				B00000000000000000000013 /* Assets.xcassets */,
+				B00000000000000000000014 /* MacRelayiOS.entitlements */,
+			);
+			path = MacRelayiOS;
 			sourceTree = "<group>";
 		};
 		A00000000000000000000002 /* MacRelay */ = {
@@ -71,6 +105,7 @@
 			isa = PBXGroup;
 			children = (
 				A00000000000000000000030 /* MacRelay.app */,
+				B00000000000000000000030 /* MacRelayiOS.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -91,8 +126,31 @@
 			dependencies = (
 			);
 			name = MacRelay;
+			packageProductDependencies = (
+				A00000000000000000000091 /* MacRelayCore */,
+			);
 			productName = MacRelay;
 			productReference = A00000000000000000000030 /* MacRelay.app */;
+			productType = "com.apple.product-type.application";
+		};
+		B00000000000000000000060 /* MacRelayiOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B00000000000000000000072 /* Build configuration list for PBXNativeTarget "MacRelayiOS" */;
+			buildPhases = (
+				B00000000000000000000050 /* Sources */,
+				B00000000000000000000051 /* Frameworks */,
+				B00000000000000000000052 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MacRelayiOS;
+			packageProductDependencies = (
+				B00000000000000000000091 /* MacRelayCore */,
+			);
+			productName = MacRelayiOS;
+			productReference = B00000000000000000000030 /* MacRelayiOS.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -107,6 +165,25 @@
 				TargetAttributes = {
 					A00000000000000000000060 = {
 						CreatedOnToolsVersion = 26.0;
+						SystemCapabilities = {
+							com.apple.Keychain = {
+								enabled = 1;
+							};
+							com.apple.iCloud = {
+								enabled = 1;
+							};
+						};
+					};
+					B00000000000000000000060 = {
+						CreatedOnToolsVersion = 26.0;
+						SystemCapabilities = {
+							com.apple.Keychain = {
+								enabled = 1;
+							};
+							com.apple.iCloud = {
+								enabled = 1;
+							};
+						};
 					};
 				};
 			};
@@ -119,11 +196,15 @@
 				Base,
 			);
 			mainGroup = A00000000000000000000001;
+			packageReferences = (
+				A00000000000000000000090 /* XCLocalSwiftPackageReference "MacRelayCore" */,
+			);
 			productRefGroup = A00000000000000000000003 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				A00000000000000000000060 /* MacRelay */,
+				B00000000000000000000060 /* MacRelayiOS */,
 			);
 		};
 /* End PBXProject section */
@@ -134,6 +215,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				A00000000000000000000047 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B00000000000000000000052 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B00000000000000000000043 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -151,6 +240,16 @@
 				A00000000000000000000044 /* ContentView.swift in Sources */,
 				A00000000000000000000045 /* KeychainStore.swift in Sources */,
 				A00000000000000000000046 /* LogManager.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B00000000000000000000050 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B00000000000000000000040 /* MacRelayiOSApp.swift in Sources */,
+				B00000000000000000000041 /* IOSIRCStore.swift in Sources */,
+				B00000000000000000000042 /* IOSContentView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -300,6 +399,76 @@
 			};
 			name = Release;
 		};
+		B00000000000000000000082 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = MacRelayiOS/MacRelayiOS.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = F8T23P4E94;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = MacRelay;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = no.varion.MacRelay.iOS;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		B00000000000000000000083 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = MacRelayiOS/MacRelayiOS.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = F8T23P4E94;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = MacRelay;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = no.varion.MacRelay.iOS;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -321,7 +490,36 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		B00000000000000000000072 /* Build configuration list for PBXNativeTarget "MacRelayiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B00000000000000000000082 /* Debug */,
+				B00000000000000000000083 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		A00000000000000000000090 /* XCLocalSwiftPackageReference "MacRelayCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = MacRelayCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A00000000000000000000091 /* MacRelayCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A00000000000000000000090 /* XCLocalSwiftPackageReference "MacRelayCore" */;
+			productName = MacRelayCore;
+		};
+		B00000000000000000000091 /* MacRelayCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A00000000000000000000090 /* XCLocalSwiftPackageReference "MacRelayCore" */;
+			productName = MacRelayCore;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A00000000000000000000061 /* Project object */;
 }

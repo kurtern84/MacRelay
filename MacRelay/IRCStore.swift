@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import MacRelayCore
 import Network
 import SwiftUI
 import UserNotifications
@@ -96,6 +97,7 @@ final class IRCStore: ObservableObject {
         ircPassword = KeychainStore.ircPassword(for: configuration.id)
         nickServPassword = KeychainStore.password(for: configuration.id)
         ignoredNicks = Set(defaults.stringArray(forKey: ignoredNicksKey) ?? [])
+        publishProfilesToICloud()
 
         ensureConversation(id: serverID, name: configuration.name, kind: .server)
         selectedConversationID = serverID
@@ -171,6 +173,7 @@ final class IRCStore: ObservableObject {
         }
         KeychainStore.setIRCPassword(ircPassword, for: configuration.id)
         KeychainStore.setPassword(nickServPassword, for: configuration.id)
+        publishProfilesToICloud()
         mutateConversation(id: serverID) { $0.name = configuration.name }
 
         if configuration.notifyOnMention {
@@ -189,6 +192,7 @@ final class IRCStore: ObservableObject {
         ircPassword = KeychainStore.ircPassword(for: id)
         nickServPassword = KeychainStore.password(for: id)
         UserDefaults.standard.set(id.uuidString, forKey: selectedProfileKey)
+        publishProfilesToICloud()
         mutateConversation(id: serverID) { $0.name = profile.name }
         saveSessionState()
     }
@@ -205,6 +209,10 @@ final class IRCStore: ObservableObject {
         ircPassword = ""
         nickServPassword = ""
         saveConfiguration()
+    }
+
+    private func publishProfilesToICloud() {
+        ICloudProfileStore.publish(profiles: profiles, selectedProfileID: configuration.id)
     }
 
     func deleteCurrentProfile() {
