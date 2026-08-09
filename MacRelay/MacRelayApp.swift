@@ -64,11 +64,19 @@ final class MacRelayAppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct MacRelayApp: App {
     @NSApplicationDelegateAdaptor(MacRelayAppDelegate.self) private var appDelegate
-    @StateObject private var store = IRCStore()
-    @StateObject private var menuBarController = MacRelayMenuBarController.shared
+    @StateObject private var store: IRCStore
+    @StateObject private var menuBarController: MacRelayMenuBarController
     @AppStorage(AppPreferenceKeys.showInMenuBar) private var showInMenuBar = false
     @AppStorage(AppPreferenceKeys.hideDockIcon) private var hideDockIcon = false
     @AppStorage(AppPreferenceKeys.keepRunningWhenWindowClosed) private var keepRunningWhenWindowClosed = true
+
+    init() {
+        let store = IRCStore()
+        let menuBarController = MacRelayMenuBarController.shared
+        _store = StateObject(wrappedValue: store)
+        _menuBarController = StateObject(wrappedValue: menuBarController)
+        menuBarController.configure(store: store)
+    }
 
     var body: some Scene {
         Window("MacRelay", id: "main") {
@@ -77,7 +85,6 @@ struct MacRelayApp: App {
                 .frame(minWidth: 920, minHeight: 600)
                 .background(MainWindowRegistrationView(controller: menuBarController))
                 .task {
-                    menuBarController.configure(store: store)
                     menuBarController.setVisible(showInMenuBar)
                     appDelegate.applyActivationPolicy(
                         showInMenuBar: showInMenuBar,
@@ -229,7 +236,14 @@ final class MacRelayMenuBarController: NSObject, ObservableObject, NSMenuDelegat
 
     private func rebuild(_ menu: NSMenu) {
         menu.removeAllItems()
-        guard let store else { return }
+        guard let store else {
+            addDisabledItem("Starter MacRelay …", to: menu)
+            menu.addItem(.separator())
+            addItem("Vis MacRelay", action: #selector(showMainWindow), to: menu)
+            menu.addItem(.separator())
+            addItem("Avslutt MacRelay", action: #selector(quit), to: menu)
+            return
+        }
 
         addDisabledItem(store.connectionState == .connected && store.isConnectedViaZNC
             ? "Tilkoblet via ZNC"
