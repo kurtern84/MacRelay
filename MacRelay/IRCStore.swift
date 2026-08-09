@@ -148,10 +148,6 @@ final class IRCStore: ObservableObject {
         conversations.first { $0.id == selectedConversationID }
     }
 
-    var totalUnreadCount: Int {
-        conversations.reduce(0) { $0 + $1.unreadCount }
-    }
-
     var serverID: String { "server" }
 
     var ignoredNicknames: [String] { ignoredNicks.sorted() }

@@ -499,13 +499,19 @@ struct ServerSettingsView: View {
             }
 
             Section("MacRelay i menylinjen") {
-                Toggle("Vis MacRelay i menylinjen", isOn: $showInMenuBar)
+                Toggle("Vis MacRelay i menylinjen", isOn: showInMenuBarBinding)
                 Toggle("La MacRelay kjøre når hovedvinduet lukkes", isOn: $keepRunningWhenWindowClosed)
-                Toggle("Skjul Dock-ikon når menylinjemodus er aktiv", isOn: $hideDockIcon)
+                Toggle("Skjul Dock-ikon når menylinjemodus er aktiv", isOn: hideDockIconBinding)
                     .disabled(!showInMenuBar)
                 Toggle("Åpne MacRelay ved innlogging", isOn: Binding(
                     get: { launchAtLoginEnabled },
-                    set: { setLaunchAtLogin($0) }
+                    set: { enabled in
+                        Task { @MainActor in
+                            await Task.yield()
+                            launchAtLoginEnabled = enabled
+                            setLaunchAtLogin(enabled)
+                        }
+                    }
                 ))
                 if let launchAtLoginMessage {
                     Text(launchAtLoginMessage)
@@ -528,15 +534,57 @@ struct ServerSettingsView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("IRC-servere")
-        .onAppear { refreshLaunchAtLoginState() }
+        .onAppear {
+            Task { @MainActor in
+                await Task.yield()
+                refreshLaunchAtLoginState()
+            }
+        }
+    }
+
+    private var showInMenuBarBinding: Binding<Bool> {
+        Binding(
+            get: { showInMenuBar },
+            set: { enabled in
+                Task { @MainActor in
+                    await Task.yield()
+                    UserDefaults.standard.set(enabled, forKey: AppPreferenceKeys.showInMenuBar)
+                    showInMenuBar = enabled
+                    MacRelayMenuBarController.shared.setVisible(enabled)
+                    (NSApp.delegate as? MacRelayAppDelegate)?.applyActivationPolicy(
+                        showInMenuBar: enabled,
+                        hideDockIcon: hideDockIcon
+                    )
+                }
+            }
+        )
+    }
+
+    private var hideDockIconBinding: Binding<Bool> {
+        Binding(
+            get: { hideDockIcon },
+            set: { enabled in
+                Task { @MainActor in
+                    await Task.yield()
+                    UserDefaults.standard.set(enabled, forKey: AppPreferenceKeys.hideDockIcon)
+                    hideDockIcon = enabled
+                    MacRelayMenuBarController.shared.setVisible(showInMenuBar)
+                    (NSApp.delegate as? MacRelayAppDelegate)?.applyActivationPolicy(
+                        showInMenuBar: showInMenuBar,
+                        hideDockIcon: enabled
+                    )
+                }
+            }
+        )
     }
 
     private func setLaunchAtLogin(_ enabled: Bool) {
         let service = SMAppService.mainApp
         do {
-            if enabled {
-                if service.status == .notRegistered { try service.register() }
-            } else if service.status != .notRegistered {
+            let isRegistered = service.status == .enabled || service.status == .requiresApproval
+            if enabled, !isRegistered {
+                try service.register()
+            } else if !enabled, isRegistered {
                 try service.unregister()
             }
             refreshLaunchAtLoginState()

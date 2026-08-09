@@ -12,7 +12,13 @@ final class MacRelayAppDelegate: NSObject, NSApplicationDelegate {
     private var automaticTerminationDisabled = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        applyActivationPolicy()
+        let defaults = UserDefaults.standard
+        let showInMenuBar = defaults.bool(forKey: AppPreferenceKeys.showInMenuBar)
+        MacRelayMenuBarController.shared.setVisible(showInMenuBar)
+        applyActivationPolicy(
+            showInMenuBar: showInMenuBar,
+            hideDockIcon: defaults.bool(forKey: AppPreferenceKeys.hideDockIcon)
+        )
         applyBackgroundPolicy()
     }
 
@@ -26,9 +32,14 @@ final class MacRelayAppDelegate: NSObject, NSApplicationDelegate {
 
     func applyActivationPolicy() {
         let defaults = UserDefaults.standard
-        let hideDockIcon = defaults.bool(forKey: AppPreferenceKeys.showInMenuBar)
-            && defaults.bool(forKey: AppPreferenceKeys.hideDockIcon)
-        NSApp.setActivationPolicy(hideDockIcon ? .accessory : .regular)
+        applyActivationPolicy(
+            showInMenuBar: defaults.bool(forKey: AppPreferenceKeys.showInMenuBar),
+            hideDockIcon: defaults.bool(forKey: AppPreferenceKeys.hideDockIcon)
+        )
+    }
+
+    func applyActivationPolicy(showInMenuBar: Bool, hideDockIcon: Bool) {
+        NSApp.setActivationPolicy(showInMenuBar && hideDockIcon ? .accessory : .regular)
     }
 
     func applyBackgroundPolicy() {
@@ -36,6 +47,10 @@ final class MacRelayAppDelegate: NSObject, NSApplicationDelegate {
         let keepRunning = defaults.object(forKey: AppPreferenceKeys.keepRunningWhenWindowClosed) == nil
             ? true
             : defaults.bool(forKey: AppPreferenceKeys.keepRunningWhenWindowClosed)
+        applyBackgroundPolicy(keepRunning: keepRunning)
+    }
+
+    func applyBackgroundPolicy(keepRunning: Bool) {
         if keepRunning, !automaticTerminationDisabled {
             ProcessInfo.processInfo.disableAutomaticTermination("MacRelay holder IRC-tilkoblingen aktiv")
             automaticTerminationDisabled = true
@@ -50,6 +65,7 @@ final class MacRelayAppDelegate: NSObject, NSApplicationDelegate {
 struct MacRelayApp: App {
     @NSApplicationDelegateAdaptor(MacRelayAppDelegate.self) private var appDelegate
     @StateObject private var store = IRCStore()
+    @StateObject private var menuBarController = MacRelayMenuBarController.shared
     @AppStorage(AppPreferenceKeys.showInMenuBar) private var showInMenuBar = false
     @AppStorage(AppPreferenceKeys.hideDockIcon) private var hideDockIcon = false
     @AppStorage(AppPreferenceKeys.keepRunningWhenWindowClosed) private var keepRunningWhenWindowClosed = true
@@ -59,12 +75,44 @@ struct MacRelayApp: App {
             ContentView()
                 .environmentObject(store)
                 .frame(minWidth: 920, minHeight: 600)
-                .task { appDelegate.applyActivationPolicy() }
-                .onChange(of: showInMenuBar) { _, _ in appDelegate.applyActivationPolicy() }
-                .onChange(of: hideDockIcon) { _, _ in appDelegate.applyActivationPolicy() }
-                .onChange(of: keepRunningWhenWindowClosed) { _, _ in appDelegate.applyBackgroundPolicy() }
+                .background(MainWindowRegistrationView(controller: menuBarController))
+                .task {
+                    menuBarController.configure(store: store)
+                    menuBarController.setVisible(showInMenuBar)
+                    appDelegate.applyActivationPolicy(
+                        showInMenuBar: showInMenuBar,
+                        hideDockIcon: hideDockIcon
+                    )
+                }
+                .onChange(of: showInMenuBar) { _, isVisible in
+                    Task { @MainActor in
+                        await Task.yield()
+                        menuBarController.setVisible(isVisible)
+                        appDelegate.applyActivationPolicy(
+                            showInMenuBar: isVisible,
+                            hideDockIcon: hideDockIcon
+                        )
+                    }
+                }
+                .onChange(of: hideDockIcon) { _, shouldHideDockIcon in
+                    Task { @MainActor in
+                        await Task.yield()
+                        menuBarController.setVisible(showInMenuBar)
+                        appDelegate.applyActivationPolicy(
+                            showInMenuBar: showInMenuBar,
+                            hideDockIcon: shouldHideDockIcon
+                        )
+                    }
+                }
+                .onChange(of: keepRunningWhenWindowClosed) { _, keepRunning in
+                    Task { @MainActor in
+                        await Task.yield()
+                        appDelegate.applyBackgroundPolicy(keepRunning: keepRunning)
+                    }
+                }
         }
         .windowStyle(.titleBar)
+        .defaultSize(width: 1280, height: 800)
         .commands {
             CommandMenu("IRC") {
                 Button("Koble til") {
@@ -124,102 +172,132 @@ struct MacRelayApp: App {
                 .padding()
         }
 
-        MenuBarExtra(isInserted: $showInMenuBar) {
-            MacRelayMenuBarView()
-                .environmentObject(store)
-        } label: {
-            Image(systemName: store.totalUnreadCount > 0
-                ? "bubble.left.and.bubble.right.fill"
-                : "bubble.left.and.bubble.right")
-                .accessibilityLabel(store.totalUnreadCount > 0
-                    ? "MacRelay, \(store.totalUnreadCount) uleste"
-                    : "MacRelay")
-        }
-        .menuBarExtraStyle(.menu)
     }
 }
 
-private struct MacRelayMenuBarView: View {
-    @EnvironmentObject private var store: IRCStore
+private struct MainWindowRegistrationView: View {
     @Environment(\.openWindow) private var openWindow
-
-    private var unreadConversations: [Conversation] {
-        store.conversations.filter { $0.unreadCount > 0 || $0.mentionCount > 0 }
-    }
+    let controller: MacRelayMenuBarController
 
     var body: some View {
-        Label(statusText, systemImage: statusIcon)
-        Text("Server: \(store.configuration.name)")
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onAppear {
+                controller.openMainWindow = { openWindow(id: "main") }
+            }
+    }
+}
 
-        if store.isConnectedViaZNC {
-            Label("Tilkoblet via ZNC", systemImage: "checkmark.shield")
+@MainActor
+final class MacRelayMenuBarController: NSObject, ObservableObject, NSMenuDelegate {
+    static let shared = MacRelayMenuBarController()
+
+    private weak var store: IRCStore?
+    private var statusItem: NSStatusItem?
+    var openMainWindow: (() -> Void)?
+
+    func configure(store: IRCStore) {
+        self.store = store
+    }
+
+    func setVisible(_ isVisible: Bool) {
+        guard isVisible != (statusItem != nil) else { return }
+
+        if isVisible {
+            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            item.autosaveName = "MacRelay.MenuBar.StatusItem.v2"
+            item.isVisible = true
+            item.button?.image = NSImage(
+                systemSymbolName: "bubble.left.and.bubble.right",
+                accessibilityDescription: "MacRelay"
+            )
+            item.button?.imagePosition = .imageLeading
+            item.button?.title = "MacRelay"
+            let menu = NSMenu()
+            menu.delegate = self
+            item.menu = menu
+            statusItem = item
+        } else if let statusItem {
+            NSStatusBar.system.removeStatusItem(statusItem)
+            self.statusItem = nil
         }
+    }
 
+    func menuWillOpen(_ menu: NSMenu) {
+        rebuild(menu)
+    }
+
+    private func rebuild(_ menu: NSMenu) {
+        menu.removeAllItems()
+        guard let store else { return }
+
+        addDisabledItem(store.connectionState == .connected && store.isConnectedViaZNC
+            ? "Tilkoblet via ZNC"
+            : store.connectionState.label, to: menu)
+        addDisabledItem("Server: \(store.configuration.name)", to: menu)
+
+        let unreadConversations = store.conversations.filter {
+            $0.unreadCount > 0 || $0.mentionCount > 0
+        }
         if !unreadConversations.isEmpty {
-            Divider()
-            Section("Ulest") {
-                ForEach(unreadConversations) { conversation in
-                    Button {
-                        showMainWindow(selecting: conversation.id)
-                    } label: {
-                        let count = max(conversation.unreadCount, conversation.mentionCount)
-                        Label(
-                            "\(conversation.name) (\(count))",
-                            systemImage: conversation.kind == .query ? "person.crop.circle" : "number"
-                        )
-                    }
-                }
+            menu.addItem(.separator())
+            addDisabledItem("Ulest", to: menu)
+            for conversation in unreadConversations {
+                let count = max(conversation.unreadCount, conversation.mentionCount)
+                let item = NSMenuItem(
+                    title: "\(conversation.name) (\(count))",
+                    action: #selector(openConversation(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = self
+                item.representedObject = conversation.id
+                menu.addItem(item)
             }
         }
 
-        Divider()
-
-        Button("Vis MacRelay") {
-            showMainWindow()
-        }
-
+        menu.addItem(.separator())
+        addItem("Vis MacRelay", action: #selector(showMainWindow), to: menu)
         if store.connectionState == .disconnected {
-            Button("Koble til") { store.connect() }
+            addItem("Koble til", action: #selector(connect), to: menu)
         } else {
-            Button("Koble fra") { store.disconnect() }
+            addItem("Koble fra", action: #selector(disconnect), to: menu)
         }
 
-        Button(store.isManuallyAway ? "Tilbake" : "Away") {
-            store.toggleManualAway()
-        }
-        .disabled(store.connectionState != .connected)
+        let awayItem = addItem(
+            store.isManuallyAway ? "Tilbake" : "Away",
+            action: #selector(toggleAway),
+            to: menu
+        )
+        awayItem.isEnabled = store.connectionState == .connected
 
-        Button("Innstillinger …") {
-            store.showSettings = true
-            showMainWindow()
-        }
-
-        Divider()
-
-        Button("Avslutt MacRelay") {
-            NSApp.terminate(nil)
-        }
+        addItem("Innstillinger …", action: #selector(showSettings), to: menu)
+        menu.addItem(.separator())
+        addItem("Avslutt MacRelay", action: #selector(quit), to: menu)
     }
 
-    private var statusText: String {
-        store.connectionState == .connected && store.isConnectedViaZNC
-            ? "Tilkoblet via ZNC"
-            : store.connectionState.label
+    @discardableResult
+    private func addItem(_ title: String, action: Selector, to menu: NSMenu) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
+        return item
     }
 
-    private var statusIcon: String {
-        switch store.connectionState {
-        case .connected: "circle.fill"
-        case .connecting: "circle.dotted"
-        case .disconnected: "circle"
-        }
+    private func addDisabledItem(_ title: String, to menu: NSMenu) {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        menu.addItem(item)
     }
 
-    private func showMainWindow(selecting conversationID: String? = nil) {
-        if let conversationID {
-            store.selectConversation(conversationID)
+    @objc private func openConversation(_ sender: NSMenuItem) {
+        if let conversationID = sender.representedObject as? String {
+            store?.selectConversation(conversationID)
         }
-        openWindow(id: "main")
+        showMainWindow()
+    }
+
+    @objc private func showMainWindow() {
+        openMainWindow?()
         Task { @MainActor in
             await Task.yield()
             NSApp.activate(ignoringOtherApps: true)
@@ -228,5 +306,26 @@ private struct MacRelayMenuBarView: View {
                 window.makeKeyAndOrderFront(nil)
             }
         }
+    }
+
+    @objc private func connect() {
+        store?.connect()
+    }
+
+    @objc private func disconnect() {
+        store?.disconnect()
+    }
+
+    @objc private func toggleAway() {
+        store?.toggleManualAway()
+    }
+
+    @objc private func showSettings() {
+        store?.showSettings = true
+        showMainWindow()
+    }
+
+    @objc private func quit() {
+        NSApp.terminate(nil)
     }
 }
