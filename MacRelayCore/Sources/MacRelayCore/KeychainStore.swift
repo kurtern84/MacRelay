@@ -2,8 +2,6 @@ import Foundation
 import Security
 
 public enum KeychainStore {
-    private static let sharedAccessGroup = "F8T23P4E94.no.varion.MacRelay.shared"
-
     public static func read(service: String, account: String) -> String {
         if let value = read(query: sharedIdentity(service: service, account: account)) {
             return value
@@ -57,11 +55,12 @@ public enum KeychainStore {
     }
 
     private static func sharedIdentity(service: String, account: String) -> [String: Any] {
+        // The shared group is first in each target's keychain-access-groups entitlement,
+        // so Keychain Services selects the correctly signed team-prefixed group by default.
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-            kSecAttrAccessGroup as String: sharedAccessGroup,
             kSecAttrSynchronizable as String: true
         ]
     }

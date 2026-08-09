@@ -91,7 +91,7 @@ Hvis Gatekeeper blokkerer første oppstart, kan du:
 ### SHA-256
 
 ```text
-9b98170fe32c1f9ff7f67e00c338cb319f6f22622e214dcca0f58b02b53f5ecb
+a92bd7408f192ab951d1e51fb8d812f7e6abefb0b94ac265baf5a24210aadbaa
 ```
 
 ---
@@ -153,6 +153,33 @@ MacRelay kobler kun klientvinduet fra. Selve IRC-økten holdes levende av ZNC.
 
 ![Logging](docs/screenshots/logging-settings.png)
 
+## Menylinjestatus
+
+![MacRelay menylinjestatus](docs/screenshots/menu-bar-status.png)
+
+## iPhone og iPad
+
+| Samtaleliste | Kanalvisning |
+| --- | --- |
+| ![MacRelay på iPhone](docs/screenshots/ios-overview-blurred.png) | ![Kanalvisning på iPhone](docs/screenshots/ios-channel-blurred.png) |
+
+Samtaleinnholdet i iOS-skjermbildene er anonymisert.
+
+---
+
+# Installere iOS companion-appen
+
+iOS-appen distribueres foreløpig ikke som en vanlig nedlastbar appfil.
+
+Du kan bruke den på én av disse måtene:
+
+- Be om tilgang til MacRelay via TestFlight når en testversjon er tilgjengelig.
+- Klon repoet og kompiler `MacRelayiOS` selv i Xcode med ditt eget Apple Developer-team.
+
+Ved egen kompilering åpner du `MacRelay.xcodeproj`, velger **MacRelayiOS**, velger en iPhone, iPad eller simulator og kjører med `⌘R`.
+
+`MacRelayCore` bygges automatisk som en avhengighet og skal ikke startes separat.
+
 ---
 
 # Bygge fra kildekode
@@ -210,7 +237,7 @@ Logger lagres lokalt under:
 - DCC SEND-tilbud oppdages og vises, men direkte filoverføring er foreløpig ikke implementert.
 - Én aktiv IRC-server om gangen. Flere serverprofiler støttes, men bare én servertilkobling kan være aktiv samtidig.
 - Distribusjonsbygget i `dist/` er ment for testing og er ikke notarized av Apple.
-- DMG-filen inneholder bare macOS-appen. iOS companion-appen installeres foreløpig fra Xcode; TestFlight kan brukes senere.
+- DMG-filen inneholder bare macOS-appen. iOS companion-appen fås via TestFlight etter forespørsel eller kompileres fra kildekoden i Xcode.
 
 ---
 

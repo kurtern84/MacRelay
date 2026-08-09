@@ -48,7 +48,7 @@ public final class IRCConnection: @unchecked Sendable {
             self.onStateChange?(state)
             if case .ready = state, !self.isReceiving {
                 self.isReceiving = true
-                self.receiveNextChunk()
+                self.receiveNextChunk(on: connection)
             }
         }
         connection.start(queue: queue)
@@ -76,15 +76,15 @@ public final class IRCConnection: @unchecked Sendable {
         receiveBuffer.removeAll(keepingCapacity: true)
     }
 
-    private func receiveNextChunk() {
-        connection?.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, isComplete, error in
-            guard let self else { return }
+    private func receiveNextChunk(on connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self, weak connection] data, _, isComplete, error in
+            guard let self, let connection, connection === self.connection else { return }
             if let data, !data.isEmpty {
                 self.receiveBuffer.append(data)
                 self.emitCompleteLines()
             }
             if error == nil, !isComplete {
-                self.receiveNextChunk()
+                self.receiveNextChunk(on: connection)
             } else if isComplete, error == nil {
                 self.isReceiving = false
                 self.debugLog("RECEIVE EOF fra server")

@@ -4,7 +4,6 @@ import Security
 enum KeychainStore {
     private static let service = "no.varion.MacRelay.NickServ"
     private static let ircPassService = "no.varion.MacRelay.IRCPass"
-    private static let sharedAccessGroup = "F8T23P4E94.no.varion.MacRelay.shared"
 
     static func password(for profileID: UUID) -> String {
         read(service: service, profileID: profileID)
@@ -92,11 +91,12 @@ enum KeychainStore {
     }
 
     private static func sharedIdentity(service: String, profileID: UUID) -> [String: Any] {
+        // The shared group is first in each target's keychain-access-groups entitlement,
+        // so Keychain Services selects the correctly signed team-prefixed group by default.
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: profileID.uuidString,
-            kSecAttrAccessGroup as String: sharedAccessGroup,
             kSecAttrSynchronizable as String: true
         ]
     }
