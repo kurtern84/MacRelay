@@ -6,6 +6,8 @@ Målet er en enkel, rask og helt native Mac-opplevelse som gjenskaper følelsen 
 
 MacRelay fokuserer på moderne IRCv3-støtte, sømløs ZNC-integrasjon og en klient som føles hjemme på macOS.
 
+**Versjon 1.1 · build 2**
+
 [Last ned MacRelay som DMG](dist/MacRelay.dmg)
 
 > **Testversjon**
@@ -56,6 +58,8 @@ Fokus er på:
 - WHOIS
 - Ignoreringsliste
 - Diskré markering av uleste meldinger og omtaler
+- Valgfri native menylinjemodus med tilkoblingsstatus og uleste samtaler
+- Valgfritt skjult Dock-ikon, kjøring etter lukket hovedvindu og oppstart ved innlogging
 - Native macOS-varsler
 - Valgfri IRC-varsellyd
 - Lokal UTF-8-logging av kanaler og private samtaler

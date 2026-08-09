@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import SwiftUI
 
 struct ContentView: View {
@@ -11,6 +12,7 @@ struct ContentView: View {
         } detail: {
             if let conversation = store.selectedConversation {
                 ConversationView(conversation: conversation)
+                    .id(conversation.id)
             } else {
                 ContentUnavailableView("Ingen samtale valgt", systemImage: "bubble.left.and.bubble.right")
             }
@@ -405,6 +407,11 @@ private struct JoinChannelView: View {
 struct ServerSettingsView: View {
     @EnvironmentObject private var store: IRCStore
     @Environment(\.dismiss) private var dismiss
+    @AppStorage(AppPreferenceKeys.showInMenuBar) private var showInMenuBar = false
+    @AppStorage(AppPreferenceKeys.keepRunningWhenWindowClosed) private var keepRunningWhenWindowClosed = true
+    @AppStorage(AppPreferenceKeys.hideDockIcon) private var hideDockIcon = false
+    @State private var launchAtLoginEnabled = false
+    @State private var launchAtLoginMessage: String?
 
     var body: some View {
         Form {
@@ -491,6 +498,25 @@ struct ServerSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("MacRelay i menylinjen") {
+                Toggle("Vis MacRelay i menylinjen", isOn: $showInMenuBar)
+                Toggle("La MacRelay kjøre når hovedvinduet lukkes", isOn: $keepRunningWhenWindowClosed)
+                Toggle("Skjul Dock-ikon når menylinjemodus er aktiv", isOn: $hideDockIcon)
+                    .disabled(!showInMenuBar)
+                Toggle("Åpne MacRelay ved innlogging", isOn: Binding(
+                    get: { launchAtLoginEnabled },
+                    set: { setLaunchAtLogin($0) }
+                ))
+                if let launchAtLoginMessage {
+                    Text(launchAtLoginMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text("Menylinjen bruker den samme IRC-tilkoblingen og ulest-statusen som hovedvinduet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             HStack {
                 Spacer()
                 Button("Lagre") {
@@ -502,6 +528,30 @@ struct ServerSettingsView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("IRC-servere")
+        .onAppear { refreshLaunchAtLoginState() }
+    }
+
+    private func setLaunchAtLogin(_ enabled: Bool) {
+        let service = SMAppService.mainApp
+        do {
+            if enabled {
+                if service.status == .notRegistered { try service.register() }
+            } else if service.status != .notRegistered {
+                try service.unregister()
+            }
+            refreshLaunchAtLoginState()
+        } catch {
+            launchAtLoginEnabled = service.status == .enabled || service.status == .requiresApproval
+            launchAtLoginMessage = "Kunne ikke endre innloggingselementet: \(error.localizedDescription)"
+        }
+    }
+
+    private func refreshLaunchAtLoginState() {
+        let status = SMAppService.mainApp.status
+        launchAtLoginEnabled = status == .enabled || status == .requiresApproval
+        launchAtLoginMessage = status == .requiresApproval
+            ? "MacRelay må godkjennes under Systeminnstillinger → Generelt → Innloggingselementer."
+            : nil
     }
 }
 

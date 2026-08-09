@@ -33,6 +33,7 @@ final class IRCStore: ObservableObject {
     @Published var incomingDCCOffer: DCCOffer?
     @Published var restorePreviousSession: Bool
     @Published private(set) var isConnectedViaZNC = false
+    @Published private(set) var isManuallyAway = false
 
     private let connection = IRCConnection()
     private let logManager = LogManager()
@@ -147,6 +148,10 @@ final class IRCStore: ObservableObject {
         conversations.first { $0.id == selectedConversationID }
     }
 
+    var totalUnreadCount: Int {
+        conversations.reduce(0) { $0 + $1.unreadCount }
+    }
+
     var serverID: String { "server" }
 
     var ignoredNicknames: [String] { ignoredNicks.sorted() }
@@ -220,6 +225,22 @@ final class IRCStore: ObservableObject {
 
     func toggleConnection() {
         connectionState == .disconnected ? connect() : disconnect()
+    }
+
+    func toggleManualAway() {
+        guard connectionState == .connected else { return }
+        if isManuallyAway {
+            connection.send("AWAY")
+            isManuallyAway = false
+            appendStatus("Du er tilbake.", kind: .notice)
+            updateAutoAwayState()
+        } else {
+            connection.send("AWAY :\(configuration.autoAwayMessage)")
+            isAutoAway = false
+            isStartAway = false
+            isManuallyAway = true
+            appendStatus("Du er markert som away.", kind: .notice)
+        }
     }
 
     func connect() {
@@ -1203,6 +1224,8 @@ final class IRCStore: ObservableObject {
             return
         }
 
+        guard !isManuallyAway else { return }
+
         if configuration.startAwayOnConnect {
             if !isStartAway {
                 if !isAutoAway {
@@ -1249,6 +1272,7 @@ final class IRCStore: ObservableObject {
     }
 
     private func markAllChannelsDisconnected() {
+        isManuallyAway = false
         for index in conversations.indices where conversations[index].kind == .channel {
             conversations[index].isJoined = false
             conversations[index].users.removeAll()
