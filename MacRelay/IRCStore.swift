@@ -826,7 +826,6 @@ final class IRCStore: ObservableObject {
         ensureConversation(id: id, name: channel, kind: .channel)
         if nick.caseInsensitiveCompare(currentNickname) == .orderedSame {
             mutateConversation(id: id) { $0.isJoined = true }
-            appendEvent("Du ble med i \(channel).", to: id)
             if restoredSelectionID == nil {
                 selectConversation(id)
             } else {
@@ -942,7 +941,6 @@ final class IRCStore: ObservableObject {
         guard let channel, let topic = message.parameters.last else { return }
         let id = conversationID(for: channel)
         mutateConversation(id: id) { $0.topic = topic }
-        appendEvent("Emne: \(topic)", to: id)
     }
 
     private func handleWhois(_ message: IRCMessage) {
@@ -974,7 +972,7 @@ final class IRCStore: ObservableObject {
             let history = logManager.recentMessages(
                 serverName: configuration.name,
                 conversationName: name
-            )
+            ).filter { !isRedundantChannelStatus($0) }
             if !history.isEmpty {
                 conversation.messages = history
                 conversation.messages.append(ChatMessage(text: "──── Ny økt ────", kind: .event))
@@ -994,6 +992,11 @@ final class IRCStore: ObservableObject {
 
     private func appendEvent(_ text: String, to id: String) {
         appendMessage(to: id, ChatMessage(text: text, kind: .event))
+    }
+
+    private func isRedundantChannelStatus(_ message: ChatMessage) -> Bool {
+        guard message.sender == nil, message.kind == .event else { return false }
+        return message.text.hasPrefix("Du ble med i ") || message.text.hasPrefix("Emne: ")
     }
 
     private func appendLocalEvent(_ text: String, to id: String) {
