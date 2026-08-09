@@ -272,6 +272,7 @@ private struct ChannelHeader: View {
 
 private struct MessageList: View {
     let messages: [ChatMessage]
+    @State private var isAtBottom = true
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -280,18 +281,28 @@ private struct MessageList: View {
                     ForEach(messages) { message in
                         MessageRow(message: message).id(message.id)
                     }
+                    Color.clear
+                        .frame(height: 1)
+                        .id("message-list-bottom")
+                        .onAppear { isAtBottom = true }
+                        .onDisappear { isAtBottom = false }
                 }
                 .padding(.vertical, 8)
             }
             .background(Color(nsColor: .textBackgroundColor))
             .onAppear { scrollToBottom(proxy) }
-            .onChange(of: messages.count) { _, _ in scrollToBottom(proxy) }
+            .onChange(of: messages.last?.id) { _, id in
+                guard id != nil, isAtBottom else { return }
+                scrollToBottom(proxy)
+            }
         }
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
-        guard let last = messages.last else { return }
-        withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(last.id, anchor: .bottom) }
+        guard !messages.isEmpty else { return }
+        withAnimation(.easeOut(duration: 0.12)) {
+            proxy.scrollTo("message-list-bottom", anchor: .bottom)
+        }
     }
 }
 

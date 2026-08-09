@@ -59,6 +59,7 @@ final class IRCStore: ObservableObject {
     private var hasSentRegistration = false
     private var advertisedCapabilities: Set<String> = []
     private var enabledCapabilities: Set<String> = []
+    private var playbackBatches: [String: (conversationID: String, separatorText: String, historyCount: Int)] = [:]
     private var isAutoAway = false
     private var isStartAway = false
     private var restoredSelectionID: String?
@@ -279,6 +280,7 @@ final class IRCStore: ObservableObject {
         hasSentRegistration = false
         advertisedCapabilities.removeAll()
         enabledCapabilities.removeAll()
+        playbackBatches.removeAll()
         isConnectedViaZNC = false
         saveSessionState()
         let prefix = isReconnect ? "Kobler til igjen" : "Kobler til"
@@ -634,12 +636,15 @@ final class IRCStore: ObservableObject {
 
     private func handle(rawLine: String) {
         guard let message = IRCMessage.parse(rawLine) else { return }
+        if isPlaybackStateEvent(message) { return }
 
         switch message.command {
         case "PING":
             if let token = message.parameters.last { sendRaw("PONG :\(token)") }
         case "CAP":
             handleCapabilities(message)
+        case "BATCH":
+            handleBatch(message)
         case "001":
             let completedReconnect = isReconnectInProgress
             connectionState = .connected
@@ -740,6 +745,7 @@ final class IRCStore: ObservableObject {
         let isOwn = sender.caseInsensitiveCompare(currentNickname) == .orderedSame
         let mention = !isOwn && kind == .channel && containsCurrentNick(text)
         let serverTimestamp = message.serverTimestamp
+        let playback = message.tags["batch"].flatMap { playbackBatches[$0] }
         appendMessage(to: id, ChatMessage(
             timestamp: serverTimestamp ?? Date(),
             sender: sender,
@@ -747,7 +753,9 @@ final class IRCStore: ObservableObject {
             kind: isAction ? .action : .normal,
             isOwn: isOwn,
             isMention: mention
-        ), deduplicateServerTime: serverTimestamp != nil)
+        ), deduplicateServerTime: serverTimestamp != nil,
+           isPlayback: playback != nil,
+           playbackHistoryCount: playback?.historyCount)
         if isNewConversation { saveSessionState() }
     }
 
@@ -789,6 +797,7 @@ final class IRCStore: ObservableObject {
                       advertisedCapabilities.contains("znc.in/server-time-iso") {
                 requestedCapabilities.append("znc.in/server-time-iso")
             }
+            requestedCapabilities.append(contentsOf: ["message-tags", "batch"])
             if isConnectedViaZNC {
                 requestedCapabilities.append(contentsOf: [
                     "echo-message",
@@ -818,6 +827,48 @@ final class IRCStore: ObservableObject {
     private func capabilityName(_ token: Substring) -> String {
         let value = token.drop(while: { $0 == "-" || $0 == "~" || $0 == "=" })
         return value.split(separator: "=", maxSplits: 1).first.map { $0.lowercased() } ?? ""
+    }
+
+    private func handleBatch(_ message: IRCMessage) {
+        guard let batchToken = message.parameters.first else { return }
+        if batchToken.hasPrefix("+"),
+           message.parameters.count >= 3,
+           message.parameters[1].caseInsensitiveCompare("znc.in/playback") == .orderedSame {
+            let batchID = String(batchToken.dropFirst())
+            let target = message.parameters[2]
+            let conversationID = self.conversationID(for: target)
+            ensureConversation(
+                id: conversationID,
+                name: target,
+                kind: isChannel(target) ? .channel : .query
+            )
+            var separatorText = "──── Ny økt ────"
+            mutateConversation(id: conversationID) { conversation in
+                if let last = conversation.messages.last,
+                   last.sender == nil,
+                   (last.text == "──── Ny økt ────" || last.text == "──── Reconnect ────") {
+                    separatorText = last.text
+                    conversation.messages.removeLast()
+                }
+            }
+            let historyCount = conversations.first(where: { $0.id == conversationID })?.messages.count ?? 0
+            playbackBatches[batchID] = (conversationID, separatorText, historyCount)
+        } else if batchToken.hasPrefix("-") {
+            let batchID = String(batchToken.dropFirst())
+            guard let playback = playbackBatches.removeValue(forKey: batchID) else { return }
+            mutateConversation(id: playback.conversationID) { conversation in
+                conversation.messages = conversation.messages.enumerated().sorted {
+                    if $0.element.timestamp == $1.element.timestamp { return $0.offset < $1.offset }
+                    return $0.element.timestamp < $1.element.timestamp
+                }.map(\.element)
+                conversation.messages.append(ChatMessage(text: playback.separatorText, kind: .event))
+            }
+        }
+    }
+
+    private func isPlaybackStateEvent(_ message: IRCMessage) -> Bool {
+        guard let batchID = message.tags["batch"], playbackBatches[batchID] != nil else { return false }
+        return ["JOIN", "PART", "QUIT", "NICK", "KICK", "MODE", "TOPIC"].contains(message.command)
     }
 
     private func handleJoin(_ message: IRCMessage) {
@@ -1015,18 +1066,35 @@ final class IRCStore: ObservableObject {
         }
     }
 
-    private func appendMessage(to id: String, _ message: ChatMessage, deduplicateServerTime: Bool = false) {
+    private func appendMessage(
+        to id: String,
+        _ message: ChatMessage,
+        deduplicateServerTime: Bool = false,
+        isPlayback: Bool = false,
+        playbackHistoryCount: Int? = nil
+    ) {
         guard let index = conversations.firstIndex(where: { $0.id == id }) else { return }
-        if deduplicateServerTime, isDuplicateServerTimeMessage(message, in: conversations[index]) { return }
+        if deduplicateServerTime,
+           let duplicateIndex = duplicateServerTimeMessageIndex(
+               message,
+               in: conversations[index],
+               playbackHistoryCount: playbackHistoryCount
+           ) {
+            let existing = conversations[index].messages[duplicateIndex]
+            if isPlayback, abs(existing.timestamp.timeIntervalSince(message.timestamp)) >= 1.0 {
+                conversations[index].messages[duplicateIndex] = message
+            }
+            return
+        }
         conversations[index].messages.append(message)
         if conversations[index].messages.count > 2_000 { conversations[index].messages.removeFirst(200) }
-        if selectedConversationID != id, !message.isOwn {
+        if !isPlayback, selectedConversationID != id, !message.isOwn {
             conversations[index].unreadCount += 1
             if message.isMention { conversations[index].mentionCount += 1 }
         }
         log(message, conversationName: conversations[index].name)
 
-        if message.isMention, configuration.notifyOnMention, selectedConversationID != id {
+        if !isPlayback, message.isMention, configuration.notifyOnMention, selectedConversationID != id {
             let content = UNMutableNotificationContent()
             content.title = conversations[index].name
             content.body = message.sender.map { "\($0): \(message.text)" } ?? message.text
@@ -1034,7 +1102,8 @@ final class IRCStore: ObservableObject {
             UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: message.id.uuidString, content: content, trigger: nil))
         }
 
-        if configuration.playNotificationSounds,
+        if !isPlayback,
+           configuration.playNotificationSounds,
            !message.isOwn,
            message.sender != nil,
            selectedConversationID != id,
@@ -1043,7 +1112,11 @@ final class IRCStore: ObservableObject {
         }
     }
 
-    private func isDuplicateServerTimeMessage(_ message: ChatMessage, in conversation: Conversation) -> Bool {
+    private func duplicateServerTimeMessageIndex(
+        _ message: ChatMessage,
+        in conversation: Conversation,
+        playbackHistoryCount: Int?
+    ) -> Int? {
         func matches(_ existing: ChatMessage, tolerance: TimeInterval) -> Bool {
             let sameSender: Bool
             switch (existing.sender, message.sender) {
@@ -1060,15 +1133,39 @@ final class IRCStore: ObservableObject {
                 && abs(existing.timestamp.timeIntervalSince(message.timestamp)) < tolerance
         }
 
-        if conversation.messages.suffix(300).contains(where: { matches($0, tolerance: 0.001) }) {
-            return true
+        func matchesLegacyLogTimestamp(_ existing: ChatMessage) -> Bool {
+            let calendar = Calendar.current
+            let existingTime = calendar.dateComponents([.hour, .minute, .second], from: existing.timestamp)
+            let messageTime = calendar.dateComponents([.hour, .minute, .second], from: message.timestamp)
+            return existing.sender?.caseInsensitiveCompare(message.sender ?? "") == .orderedSame
+                && existing.text == message.text
+                && existing.kind == message.kind
+                && existingTime.hour == messageTime.hour
+                && existingTime.minute == messageTime.minute
+                && existingTime.second == messageTime.second
+        }
+
+        if let index = conversation.messages.indices.suffix(300).first(where: {
+            matches(conversation.messages[$0], tolerance: 0.001)
+        }) {
+            return index
+        }
+
+        if let playbackHistoryCount {
+            let upperBound = min(playbackHistoryCount, conversation.messages.count)
+            if let index = conversation.messages.indices[..<upperBound].suffix(300).first(where: {
+                matchesLegacyLogTimestamp(conversation.messages[$0])
+            }) {
+                return index
+            }
         }
 
         guard let separatorIndex = conversation.messages.firstIndex(where: {
             $0.sender == nil && $0.text == "──── Ny økt ────"
-        }) else { return false }
-        return conversation.messages[..<separatorIndex].suffix(300).contains {
-            matches($0, tolerance: 1.0)
+        }) else { return nil }
+        return conversation.messages.indices[..<separatorIndex].suffix(300).first {
+            matches(conversation.messages[$0], tolerance: 1.0)
+                || matchesLegacyLogTimestamp(conversation.messages[$0])
         }
     }
 

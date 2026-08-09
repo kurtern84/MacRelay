@@ -5,7 +5,12 @@ final class LogManager {
     private let fileManager = FileManager.default
 
     func append(_ message: ChatMessage, serverName: String, conversationName: String) {
-        guard let url = logURL(serverName: serverName, conversationName: conversationName, createDirectories: true) else { return }
+        guard let url = logURL(
+            serverName: serverName,
+            conversationName: conversationName,
+            date: message.timestamp,
+            createDirectories: true
+        ) else { return }
         let line = format(message) + "\n"
         guard let data = line.data(using: .utf8) else { return }
 
@@ -47,10 +52,11 @@ final class LogManager {
         let logFiles = files
             .filter { $0.pathExtension == "log" }
             .sorted { $0.lastPathComponent > $1.lastPathComponent }
+        let candidateLimit = limit * 4
         var messages: [ChatMessage] = []
         var remainingBytes = 512 * 1_024
 
-        for file in logFiles where messages.count < limit && remainingBytes > 0 {
+        for file in logFiles where messages.count < candidateLimit && remainingBytes > 0 {
             let maximumBytes = min(remainingBytes, 128 * 1_024)
             guard let tail = readTail(of: file, maximumBytes: maximumBytes),
                   let contents = String(data: tail.data, encoding: .utf8) else { continue }
@@ -58,20 +64,33 @@ final class LogManager {
 
             var lines = contents.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
             if tail.wasTruncated, !lines.isEmpty { lines.removeFirst() }
-            let available = limit - messages.count
+            let available = candidateLimit - messages.count
             let parsed = lines.suffix(available).compactMap { parse($0, file: file) }
             messages.insert(contentsOf: parsed, at: 0)
         }
 
-        return Array(messages.suffix(limit))
+        let sortedMessages = messages.enumerated().sorted {
+            if $0.element.timestamp == $1.element.timestamp { return $0.offset < $1.offset }
+            return $0.element.timestamp < $1.element.timestamp
+        }.map(\.element)
+        var seen = Set<HistoryMessageKey>()
+        let uniqueMessages = sortedMessages.filter { message in
+            seen.insert(HistoryMessageKey(message)).inserted
+        }
+        return Array(uniqueMessages.suffix(limit))
     }
 
-    private func logURL(serverName: String, conversationName: String, createDirectories: Bool) -> URL? {
+    private func logURL(
+        serverName: String,
+        conversationName: String,
+        date: Date = Date(),
+        createDirectories: Bool
+    ) -> URL? {
         guard let directory = logDirectory(serverName: serverName, conversationName: conversationName) else { return nil }
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
         if createDirectories { try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true) }
-        return directory.appendingPathComponent(formatter.string(from: Date()) + ".log")
+        return directory.appendingPathComponent(formatter.string(from: date) + ".log")
     }
 
     private func logDirectory(serverName: String, conversationName: String) -> URL? {
@@ -138,5 +157,22 @@ final class LogManager {
             return "[\(timestamp)] \(message.kind == .action ? marker + " " + sender : marker) \(message.text)"
         }
         return "[\(timestamp)] * \(message.text)"
+    }
+
+    private struct HistoryMessageKey: Hashable {
+        let secondOfDay: Int
+        let sender: String?
+        let text: String
+        let kind: String
+
+        init(_ message: ChatMessage) {
+            let components = Calendar.current.dateComponents([.hour, .minute, .second], from: message.timestamp)
+            secondOfDay = (components.hour ?? 0) * 3_600
+                + (components.minute ?? 0) * 60
+                + (components.second ?? 0)
+            sender = message.sender?.lowercased()
+            text = message.text
+            kind = message.kind.rawValue
+        }
     }
 }

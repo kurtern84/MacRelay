@@ -6,6 +6,7 @@ import Network
 private struct IOSSession: Codable {
     var profileID: UUID
     var openChannels: [String]
+    var joinedChannels: [String]?
     var openQueries: [String]
     var selectedConversationID: String?
     var shouldReconnect: Bool
@@ -35,6 +36,7 @@ final class IOSIRCStore: ObservableObject {
     private var currentNickname = ""
     private var enabledCapabilities: Set<String> = []
     private var advertisedCapabilities: Set<String> = []
+    private var playbackBatches: [String: (conversationID: String, separatorText: String, historyCount: Int)] = [:]
     private var hasSentRegistration = false
     private var intentionalDisconnect = false
     private var appIsActive = true
@@ -42,6 +44,9 @@ final class IOSIRCStore: ObservableObject {
     private var reconnectAttempt = 0
     private var shouldReconnectInForeground = false
     private var channelsToRestore: Set<String> = []
+    private var restoredSelectionID: String?
+    private var pendingRestoredChannelIDs: Set<String> = []
+    private var restoreSelectionTask: Task<Void, Never>?
     private var seenMessageIDs: Set<String> = []
     private var seenMessageIDOrder: [String] = []
     private var historyCache: [String: [ChatMessage]] = [:]
@@ -106,6 +111,7 @@ final class IOSIRCStore: ObservableObject {
 
     deinit {
         reconnectTask?.cancel()
+        restoreSelectionTask?.cancel()
         if let iCloudObserver { NotificationCenter.default.removeObserver(iCloudObserver) }
     }
 
@@ -118,6 +124,7 @@ final class IOSIRCStore: ObservableObject {
         hasSentRegistration = false
         enabledCapabilities.removeAll()
         advertisedCapabilities.removeAll()
+        playbackBatches.removeAll()
         isConnectedViaZNC = false
         connectionState = .connecting
         appendStatus("Kobler til \(configuration.host):\(configuration.port) …")
@@ -245,6 +252,7 @@ final class IOSIRCStore: ObservableObject {
     }
 
     private func resetWorkspace() {
+        clearRestoredSelection()
         conversations.removeAll()
         ensureConversation(id: serverID, name: configuration.name, kind: .server)
         selectedConversationID = serverID
@@ -365,10 +373,12 @@ final class IOSIRCStore: ObservableObject {
 
     private func handle(rawLine: String) {
         guard let message = IRCMessage.parse(rawLine) else { return }
+        if isPlaybackStateEvent(message) { return }
         switch message.command {
         case "PING":
             if let token = message.parameters.last { connection.send("PONG :\(token)") }
         case "CAP": handleCapabilities(message)
+        case "BATCH": handleBatch(message)
         case "001": handleWelcome(message)
         case "433":
             currentNickname = currentNickname.caseInsensitiveCompare(configuration.nickname) == .orderedSame
@@ -404,7 +414,14 @@ final class IOSIRCStore: ObservableObject {
         if !nickServPassword.isEmpty { sendRaw("PRIVMSG NickServ :IDENTIFY \(nickServPassword)") }
         let channels = Set(configuration.channels).union(channelsToRestore)
         channels.forEach { sendRaw("JOIN \($0)") }
-        channelsToRestore.removeAll()
+        if restoredSelectionID != nil {
+            pendingRestoredChannelIDs = Set(channels.map(conversationID))
+            if pendingRestoredChannelIDs.isEmpty {
+                clearRestoredSelection()
+            } else {
+                scheduleRestoredSelectionCleanup()
+            }
+        }
         shouldReconnectInForeground = true
         saveSession()
     }
@@ -433,6 +450,44 @@ final class IOSIRCStore: ObservableObject {
             connection.send("CAP END")
         case "NAK": connection.send("CAP END")
         default: break
+        }
+    }
+
+    private func handleBatch(_ message: IRCMessage) {
+        guard let batchToken = message.parameters.first else { return }
+        if batchToken.hasPrefix("+"),
+           message.parameters.count >= 3,
+           message.parameters[1].caseInsensitiveCompare("znc.in/playback") == .orderedSame {
+            let batchID = String(batchToken.dropFirst())
+            let target = message.parameters[2]
+            let conversationID = self.conversationID(target)
+            ensureConversation(
+                id: conversationID,
+                name: target,
+                kind: isChannel(target) ? .channel : .query
+            )
+            var separatorText = "──── Live ────"
+            mutateConversation(conversationID) { conversation in
+                if let last = conversation.messages.last,
+                   last.sender == nil,
+                   (last.text == "──── Live ────" || last.text == "──── Reconnect ────") {
+                    separatorText = last.text
+                    conversation.messages.removeLast()
+                }
+            }
+            let historyCount = conversations.first(where: { $0.id == conversationID })?.messages.count ?? 0
+            playbackBatches[batchID] = (conversationID, separatorText, historyCount)
+        } else if batchToken.hasPrefix("-") {
+            let batchID = String(batchToken.dropFirst())
+            guard let playback = playbackBatches.removeValue(forKey: batchID) else { return }
+            mutateConversation(playback.conversationID) { conversation in
+                conversation.messages = conversation.messages.enumerated().sorted {
+                    if $0.element.timestamp == $1.element.timestamp { return $0.offset < $1.offset }
+                    return $0.element.timestamp < $1.element.timestamp
+                }.map(\.element)
+                conversation.messages.append(ChatMessage(text: playback.separatorText, kind: .event))
+            }
+            persistHistory(for: playback.conversationID)
         }
     }
 
@@ -476,7 +531,16 @@ final class IOSIRCStore: ObservableObject {
         ensureConversation(id: id, name: channel, kind: .channel)
         if nick.caseInsensitiveCompare(currentNickname) == .orderedSame {
             mutateConversation(id) { $0.isJoined = true }
-            selectConversation(id)
+            channelsToRestore = Set(channelsToRestore.filter {
+                $0.caseInsensitiveCompare(channel) != .orderedSame
+            })
+            if restoredSelectionID == nil {
+                selectConversation(id)
+            } else {
+                pendingRestoredChannelIDs.remove(id)
+                if pendingRestoredChannelIDs.isEmpty { clearRestoredSelection() }
+                saveSession()
+            }
         } else {
             addUser(IRCUser(nickname: nick), to: id)
         }
@@ -488,6 +552,10 @@ final class IOSIRCStore: ObservableObject {
         let id = conversationID(channel)
         if nick.caseInsensitiveCompare(currentNickname) == .orderedSame {
             mutateConversation(id) { $0.isJoined = false; $0.users.removeAll() }
+            channelsToRestore = Set(channelsToRestore.filter {
+                $0.caseInsensitiveCompare(channel) != .orderedSame
+            })
+            saveSession()
         } else { removeUser(nick, from: id) }
     }
 
@@ -601,17 +669,29 @@ final class IOSIRCStore: ObservableObject {
 
     private func appendMessage(to id: String, message: ChatMessage, source: IRCMessage? = nil) {
         guard let index = conversations.firstIndex(where: { $0.id == id }) else { return }
-        if let source, isDuplicate(message, source: source, conversation: conversations[index]) { return }
+        let playback = source?.tags["batch"].flatMap { playbackBatches[$0] }
+        if let source, isDuplicate(
+            message,
+            source: source,
+            conversation: conversations[index],
+            playbackHistoryCount: playback?.historyCount
+        ) { return }
+        let isPlayback = playback != nil
         conversations[index].messages.append(message)
         if conversations[index].messages.count > 2_000 { conversations[index].messages.removeFirst(200) }
-        if selectedConversationID != id, !message.isOwn {
+        if !isPlayback, selectedConversationID != id, !message.isOwn {
             conversations[index].unreadCount += 1
             if message.isMention { conversations[index].mentionCount += 1 }
         }
         persistHistory(for: id)
     }
 
-    private func isDuplicate(_ message: ChatMessage, source: IRCMessage, conversation: Conversation) -> Bool {
+    private func isDuplicate(
+        _ message: ChatMessage,
+        source: IRCMessage,
+        conversation: Conversation,
+        playbackHistoryCount: Int?
+    ) -> Bool {
         if let messageID = source.tags["msgid"], !messageID.isEmpty {
             guard !seenMessageIDs.contains(messageID) else { return true }
             seenMessageIDs.insert(messageID)
@@ -621,11 +701,27 @@ final class IOSIRCStore: ObservableObject {
             }
         }
         guard source.serverTimestamp != nil else { return false }
-        return conversation.messages.suffix(400).contains {
+        if conversation.messages.suffix(400).contains(where: {
             $0.sender?.caseInsensitiveCompare(message.sender ?? "") == .orderedSame
                 && $0.text == message.text
                 && $0.kind == message.kind
                 && abs($0.timestamp.timeIntervalSince(message.timestamp)) < 0.001
+        }) {
+            return true
+        }
+
+        guard let playbackHistoryCount else { return false }
+        let upperBound = min(playbackHistoryCount, conversation.messages.count)
+        let calendar = Calendar.current
+        let messageTime = calendar.dateComponents([.hour, .minute, .second], from: message.timestamp)
+        return conversation.messages[..<upperBound].suffix(400).contains {
+            let existingTime = calendar.dateComponents([.hour, .minute, .second], from: $0.timestamp)
+            return $0.sender?.caseInsensitiveCompare(message.sender ?? "") == .orderedSame
+                && $0.text == message.text
+                && $0.kind == message.kind
+                && existingTime.hour == messageTime.hour
+                && existingTime.minute == messageTime.minute
+                && existingTime.second == messageTime.second
         }
     }
 
@@ -712,6 +808,9 @@ final class IOSIRCStore: ObservableObject {
         let session = IOSSession(
             profileID: configuration.id,
             openChannels: conversations.filter { $0.kind == .channel }.map(\.name),
+            joinedChannels: Array(Set(
+                conversations.filter { $0.kind == .channel && $0.isJoined }.map(\.name)
+            ).union(channelsToRestore)),
             openQueries: conversations.filter { $0.kind == .query }.map(\.name),
             selectedConversationID: selectedConversationID,
             shouldReconnect: shouldReconnectInForeground && !intentionalDisconnect
@@ -727,9 +826,31 @@ final class IOSIRCStore: ObservableObject {
         session.openQueries.forEach { ensureConversation(id: conversationID($0), name: $0, kind: .query) }
         if let selected = session.selectedConversationID, conversations.contains(where: { $0.id == selected }) {
             selectedConversationID = selected
+            restoredSelectionID = selected
         }
-        channelsToRestore = Set(session.openChannels)
+        channelsToRestore = Set(session.joinedChannels ?? session.openChannels)
         shouldReconnectInForeground = session.shouldReconnect
         if session.shouldReconnect { Task { @MainActor [weak self] in await Task.yield(); self?.connect() } }
+    }
+
+    private func isPlaybackStateEvent(_ message: IRCMessage) -> Bool {
+        guard let batchID = message.tags["batch"], playbackBatches[batchID] != nil else { return false }
+        return ["JOIN", "PART", "QUIT", "NICK", "KICK", "MODE", "TOPIC"].contains(message.command)
+    }
+
+    private func scheduleRestoredSelectionCleanup() {
+        restoreSelectionTask?.cancel()
+        restoreSelectionTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(10))
+            guard !Task.isCancelled else { return }
+            self?.clearRestoredSelection()
+        }
+    }
+
+    private func clearRestoredSelection() {
+        restoreSelectionTask?.cancel()
+        restoreSelectionTask = nil
+        restoredSelectionID = nil
+        pendingRestoredChannelIDs.removeAll()
     }
 }
