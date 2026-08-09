@@ -92,6 +92,7 @@ public final class IRCConnection: @unchecked Sendable {
             } else if let error {
                 self.isReceiving = false
                 self.debugLog("RECEIVE ERROR \(error)")
+                self.onUnexpectedClose?()
             }
         }
     }

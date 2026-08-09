@@ -91,7 +91,7 @@ Hvis Gatekeeper blokkerer første oppstart, kan du:
 ### SHA-256
 
 ```text
-2204755680f729f50ff95e0416a12b3c1a4b78e02a56dfcb9468c646b3a0f4dd
+3c1b20ac26306557623bfbddd605664043f2138f08bdfeb3265aa55b12976b4f
 ```
 
 ---
