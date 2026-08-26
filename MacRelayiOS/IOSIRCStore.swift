@@ -2,6 +2,7 @@ import Combine
 import Foundation
 import MacRelayCore
 import Network
+import UserNotifications
 
 private struct IOSSession: Codable {
     var profileID: UUID
@@ -52,6 +53,7 @@ final class IOSIRCStore: ObservableObject {
     private var historyCache: [String: [ChatMessage]] = [:]
     private var loadedHistoryIDs: Set<String> = []
     private var iCloudObserver: NSObjectProtocol?
+    private var pendingManualJoinID: String?
 
     var selectedConversation: Conversation? {
         guard let selectedConversationID else { return nil }
@@ -81,6 +83,7 @@ final class IOSIRCStore: ObservableObject {
         ircPassword = KeychainStore.read(service: Self.ircPassService, account: configuration.id.uuidString)
         nickServPassword = KeychainStore.read(service: Self.nickServService, account: configuration.id.uuidString)
         historyCache = Self.readHistory(profileID: configuration.id)
+        if configuration.notifyOnMention { requestNotificationAuthorization() }
 
         ensureConversation(id: serverID, name: configuration.name, kind: .server)
         selectedConversationID = serverID
@@ -143,7 +146,7 @@ final class IOSIRCStore: ObservableObject {
         reconnectTask?.cancel()
         reconnectTask = nil
         reconnectAttempt = 0
-        if connectionState == .connected { connection.send("QUIT :MacRelay for iOS avsluttes") }
+        if connectionState == .connected { connection.send("QUIT :\(configuration.quitMessage)") }
         connection.disconnect(reason: "manuell disconnect")
         connectionState = .disconnected
         markChannelsDisconnected()
@@ -184,10 +187,20 @@ final class IOSIRCStore: ObservableObject {
         var name = joinChannelText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
         if !isChannel(name) { name = "#" + name }
+        pendingManualJoinID = conversationID(name)
         ensureConversation(id: conversationID(name), name: name, kind: .channel)
         sendRaw("JOIN \(name)")
         joinChannelText = ""
         showingJoin = false
+    }
+
+    func leaveChannel(_ id: String) {
+        guard let conversation = conversations.first(where: { $0.id == id }),
+              conversation.kind == .channel else { return }
+        if conversation.isJoined, connectionState == .connected {
+            sendRaw("PART \(conversation.name) :\(configuration.partMessage)")
+        }
+        removeChannelFromWorkspace(id: id, channel: conversation.name)
     }
 
     func openQuery(_ nickname: String) {
@@ -237,18 +250,22 @@ final class IOSIRCStore: ObservableObject {
     }
 
     func saveProfile() {
+        configuration.partMessage = normalizedDisconnectMessage(configuration.partMessage, fallback: "Forlater kanalen")
+        configuration.quitMessage = normalizedDisconnectMessage(configuration.quitMessage, fallback: "MacRelay avsluttes")
         if let index = profiles.firstIndex(where: { $0.id == configuration.id }) {
             profiles[index] = configuration
         } else {
             profiles.append(configuration)
         }
         persistProfiles()
+        ICloudProfileStore.publish(profiles: profiles, selectedProfileID: configuration.id)
         KeychainStore.write(ircPassword, service: Self.ircPassService, account: configuration.id.uuidString)
         KeychainStore.write(nickServPassword, service: Self.nickServService, account: configuration.id.uuidString)
         UserDefaults.standard.set(configuration.id.uuidString, forKey: selectedProfileKey)
         if let serverIndex = conversations.firstIndex(where: { $0.id == serverID }) {
             conversations[serverIndex].name = configuration.name
         }
+        if configuration.notifyOnMention { requestNotificationAuthorization() }
     }
 
     private func resetWorkspace() {
@@ -534,7 +551,10 @@ final class IOSIRCStore: ObservableObject {
             channelsToRestore = Set(channelsToRestore.filter {
                 $0.caseInsensitiveCompare(channel) != .orderedSame
             })
-            if restoredSelectionID == nil {
+            if pendingManualJoinID == id {
+                pendingManualJoinID = nil
+                selectConversation(id)
+            } else if restoredSelectionID == nil, selectedConversation?.kind == .server {
                 selectConversation(id)
             } else {
                 pendingRestoredChannelIDs.remove(id)
@@ -551,11 +571,7 @@ final class IOSIRCStore: ObservableObject {
         guard let nick = message.nickname, let channel = message.parameters.first else { return }
         let id = conversationID(channel)
         if nick.caseInsensitiveCompare(currentNickname) == .orderedSame {
-            mutateConversation(id) { $0.isJoined = false; $0.users.removeAll() }
-            channelsToRestore = Set(channelsToRestore.filter {
-                $0.caseInsensitiveCompare(channel) != .orderedSame
-            })
-            saveSession()
+            removeChannelFromWorkspace(id: id, channel: channel)
         } else { removeUser(nick, from: id) }
     }
 
@@ -624,7 +640,15 @@ final class IOSIRCStore: ObservableObject {
         let argument = parts.count > 1 ? String(parts[1]) : ""
         switch command {
         case "join", "j": joinChannelText = argument; joinChannel()
-        case "part": if let selectedConversation, selectedConversation.kind == .channel { sendRaw("PART \(selectedConversation.name) :Forlater kanalen") }
+        case "part":
+            if let selectedConversation, selectedConversation.kind == .channel {
+                if argument.isEmpty {
+                    leaveChannel(selectedConversation.id)
+                } else {
+                    sendRaw("PART \(selectedConversation.name) :\(argument)")
+                    removeChannelFromWorkspace(id: selectedConversation.id, channel: selectedConversation.name)
+                }
+            }
         case "msg":
             let values = argument.split(separator: " ", maxSplits: 1)
             if values.count == 2 { openQuery(String(values[0])); sendMessage(String(values[1]), to: String(values[0])) }
@@ -639,7 +663,19 @@ final class IOSIRCStore: ObservableObject {
         case "nick": if !argument.isEmpty { sendRaw("NICK \(argument)") }
         case "whois": if !argument.isEmpty { sendRaw("WHOIS \(argument)") }
         case "quote", "raw": if !argument.isEmpty { sendRaw(argument) }
-        case "quit": disconnect()
+        case "quit":
+            intentionalDisconnect = true
+            shouldReconnectInForeground = false
+            reconnectTask?.cancel()
+            reconnectTask = nil
+            if connectionState == .connected {
+                sendRaw("QUIT :\(argument.isEmpty ? configuration.quitMessage : argument)")
+            }
+            connection.disconnect(reason: "/quit")
+            connectionState = .disconnected
+            markChannelsDisconnected()
+            appendStatus("Koblet fra serveren.")
+            saveSession()
         default: appendStatus("Ukjent kommando: /\(command)")
         }
     }
@@ -682,6 +718,14 @@ final class IOSIRCStore: ObservableObject {
         if !isPlayback, selectedConversationID != id, !message.isOwn {
             conversations[index].unreadCount += 1
             if message.isMention { conversations[index].mentionCount += 1 }
+        }
+        if !isPlayback, message.isMention, configuration.notifyOnMention, selectedConversationID != id {
+            let content = UNMutableNotificationContent()
+            content.title = conversations[index].name
+            content.body = message.sender.map { "\($0): \(message.text)" } ?? message.text
+            content.sound = .default
+            let request = UNNotificationRequest(identifier: message.id.uuidString, content: content, trigger: nil)
+            UNUserNotificationCenter.current().add(request)
         }
         persistHistory(for: id)
     }
@@ -816,6 +860,29 @@ final class IOSIRCStore: ObservableObject {
             shouldReconnect: shouldReconnectInForeground && !intentionalDisconnect
         )
         if let data = try? JSONEncoder().encode(session) { UserDefaults.standard.set(data, forKey: sessionKey) }
+    }
+
+    private func removeChannelFromWorkspace(id: String, channel: String) {
+        channelsToRestore = Set(channelsToRestore.filter {
+            $0.caseInsensitiveCompare(channel) != .orderedSame
+        })
+        pendingRestoredChannelIDs.remove(id)
+        if restoredSelectionID == id { clearRestoredSelection() }
+        conversations.removeAll { $0.id == id }
+        if selectedConversationID == id { selectedConversationID = serverID }
+        saveSession()
+    }
+
+    private func normalizedDisconnectMessage(_ message: String, fallback: String) -> String {
+        let cleaned = message
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? fallback : cleaned
+    }
+
+    private func requestNotificationAuthorization() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
     private func restoreSession() {

@@ -122,12 +122,15 @@ public struct ServerConfiguration: Codable, Equatable, Identifiable, Sendable {
     public var startAwayOnConnect = false
     public var autoAwayMinutes = 15
     public var autoAwayMessage = "Ikke ved Mac-en"
+    public var partMessage = "Forlater kanalen"
+    public var quitMessage = "MacRelay avsluttes"
 
     private enum CodingKeys: String, CodingKey {
         case id, name, host, port, useTLS, nickname, alternateNickname
         case username, realName, autoJoinChannels, allowUntrustedCertificate
         case loggingEnabled, notifyOnMention, playNotificationSounds
         case autoAwayEnabled, startAwayOnConnect, autoAwayMinutes, autoAwayMessage
+        case partMessage, quitMessage
     }
 
     public init() {}
@@ -152,6 +155,8 @@ public struct ServerConfiguration: Codable, Equatable, Identifiable, Sendable {
         startAwayOnConnect = try values.decodeIfPresent(Bool.self, forKey: .startAwayOnConnect) ?? false
         autoAwayMinutes = try values.decodeIfPresent(Int.self, forKey: .autoAwayMinutes) ?? 15
         autoAwayMessage = try values.decodeIfPresent(String.self, forKey: .autoAwayMessage) ?? "Ikke ved Mac-en"
+        partMessage = try values.decodeIfPresent(String.self, forKey: .partMessage) ?? "Forlater kanalen"
+        quitMessage = try values.decodeIfPresent(String.self, forKey: .quitMessage) ?? "MacRelay avsluttes"
     }
 
     public var channels: [String] {

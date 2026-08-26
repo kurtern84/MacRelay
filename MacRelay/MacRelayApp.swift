@@ -10,6 +10,11 @@ enum AppPreferenceKeys {
 @MainActor
 final class MacRelayAppDelegate: NSObject, NSApplicationDelegate {
     private var automaticTerminationDisabled = false
+    private weak var store: IRCStore?
+
+    func configure(store: IRCStore) {
+        self.store = store
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let defaults = UserDefaults.standard
@@ -28,6 +33,10 @@ final class MacRelayAppDelegate: NSObject, NSApplicationDelegate {
             ? true
             : defaults.bool(forKey: AppPreferenceKeys.keepRunningWhenWindowClosed)
         return !keepRunning
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        store?.prepareForTermination()
     }
 
     func applyActivationPolicy() {
@@ -85,6 +94,7 @@ struct MacRelayApp: App {
                 .frame(minWidth: 920, minHeight: 600)
                 .background(MainWindowRegistrationView(controller: menuBarController))
                 .task {
+                    appDelegate.configure(store: store)
                     menuBarController.setVisible(showInMenuBar)
                     appDelegate.applyActivationPolicy(
                         showInMenuBar: showInMenuBar,

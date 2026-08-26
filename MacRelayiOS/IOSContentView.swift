@@ -1,3 +1,4 @@
+import Foundation
 import MacRelayCore
 import SwiftUI
 
@@ -62,7 +63,16 @@ struct IOSContentView: View {
             if !channels.isEmpty {
                 Section("Kanaler") {
                     ForEach(channels) { conversation in
-                        ConversationListRow(conversation: conversation).tag(conversation.id)
+                        ConversationListRow(conversation: conversation)
+                            .tag(conversation.id)
+                            .swipeActions {
+                                Button(role: .destructive) { store.leaveChannel(conversation.id) } label: {
+                                    Label("Forlat", systemImage: "rectangle.portrait.and.arrow.right")
+                                }
+                            }
+                            .contextMenu {
+                                Button("Forlat kanal", role: .destructive) { store.leaveChannel(conversation.id) }
+                            }
                     }
                 }
             }
@@ -162,6 +172,15 @@ private struct ConversationView: View {
         .navigationTitle(conversation.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if conversation.kind == .channel {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button("Forlat kanal", role: .destructive) { store.leaveChannel(conversation.id) }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                }
+            }
             if store.isConnectedViaZNC {
                 ToolbarItem(placement: .principal) {
                     VStack(spacing: 0) {
@@ -195,6 +214,12 @@ private struct MessageList: View {
                 .padding(.vertical, 10)
             }
             .defaultScrollAnchor(.bottom)
+            .onAppear {
+                Task { @MainActor in
+                    await Task.yield()
+                    proxy.scrollTo("message-list-bottom", anchor: .bottom)
+                }
+            }
             .onChange(of: messages.last?.id) { _, id in
                 guard id != nil, isAtBottom else { return }
                 withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo("message-list-bottom", anchor: .bottom) }
@@ -222,12 +247,29 @@ private struct MessageRow: View {
                     .font(.system(.body, design: .monospaced, weight: .semibold))
                     .foregroundStyle(message.isOwn ? .cyan : nickColor(sender))
             }
-            Text(message.text)
+            Text(linkifiedText(message.text))
                 .font(.system(.body, design: .monospaced))
                 .foregroundStyle(message.kind == .error ? .orange : message.kind == .event ? .secondary : .primary)
                 .textSelection(.enabled)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func linkifiedText(_ text: String) -> AttributedString {
+        var attributed = AttributedString(text)
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
+            return attributed
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        for match in detector.matches(in: text, range: range) {
+            guard let url = match.url, let stringRange = Range(match.range, in: text) else { continue }
+            let lowerOffset = text.distance(from: text.startIndex, to: stringRange.lowerBound)
+            let upperOffset = text.distance(from: text.startIndex, to: stringRange.upperBound)
+            let lower = attributed.characters.index(attributed.startIndex, offsetBy: lowerOffset)
+            let upper = attributed.characters.index(attributed.startIndex, offsetBy: upperOffset)
+            attributed[lower..<upper].link = url
+        }
+        return attributed
     }
 
     private func nickColor(_ nick: String) -> Color {
@@ -313,6 +355,19 @@ private struct SettingsView: View {
             Section("Automatisk tilkobling") {
                 TextField("Kanaler, separert med komma", text: $store.configuration.autoJoinChannels)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
+            }
+
+            Section("Meldinger ved frakobling") {
+                TextField("Leave-melding", text: $store.configuration.partMessage)
+                TextField("Quit-melding", text: $store.configuration.quitMessage)
+                Text("Leave-meldingen sendes med PART. Quit-meldingen sendes ved manuell frakobling.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Varsler") {
+                Toggle("Varsle når navnet mitt nevnes", isOn: $store.configuration.notifyOnMention)
+                Text("Lokale varsler virker mens iOS-appen er tilkoblet. Varsler når appen er avsluttet krever APNs via en bouncer eller push-tjeneste.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .navigationTitle("IRC-servere")

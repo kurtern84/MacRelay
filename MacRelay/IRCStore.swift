@@ -65,6 +65,7 @@ final class IRCStore: ObservableObject {
     private var restoredSelectionID: String?
     private var pendingRestoredChannelIDs: Set<String> = []
     private var restoreSelectionTask: Task<Void, Never>?
+    private var pendingManualJoinID: String?
 
     init() {
         let defaults = UserDefaults.standard
@@ -163,6 +164,8 @@ final class IRCStore: ObservableObject {
         }
         configuration.autoAwayMessage = configuration.autoAwayMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         if configuration.autoAwayMessage.isEmpty { configuration.autoAwayMessage = "Ikke ved Mac-en" }
+        configuration.partMessage = normalizedDisconnectMessage(configuration.partMessage, fallback: "Forlater kanalen")
+        configuration.quitMessage = normalizedDisconnectMessage(configuration.quitMessage, fallback: "MacRelay avsluttes")
         if let index = profiles.firstIndex(where: { $0.id == configuration.id }) {
             profiles[index] = configuration
         } else {
@@ -303,7 +306,7 @@ final class IRCStore: ObservableObject {
         reconnectTask?.cancel()
         reconnectTask = nil
         reconnectAttempt = 0
-        if connectionState == .connected { sendRaw("QUIT :MacRelay avsluttes") }
+        if connectionState == .connected { sendRaw("QUIT :\(configuration.quitMessage)") }
         connection.disconnect(reason: "manuell disconnect")
         connectionState = .disconnected
         markAllChannelsDisconnected()
@@ -331,6 +334,7 @@ final class IRCStore: ObservableObject {
         var channel = joinChannelText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !channel.isEmpty else { return }
         if !channel.hasPrefix("#") && !channel.hasPrefix("&") { channel = "#" + channel }
+        pendingManualJoinID = conversationID(for: channel)
         sendRaw("JOIN \(channel)")
         joinChannelText = ""
         showJoinChannel = false
@@ -338,7 +342,7 @@ final class IRCStore: ObservableObject {
 
     func part(_ conversation: Conversation) {
         guard conversation.kind == .channel else { return }
-        sendRaw("PART \(conversation.name) :Forlater kanalen")
+        sendRaw("PART \(conversation.name) :\(configuration.partMessage)")
     }
 
     func requestTopic(for conversation: Conversation) {
@@ -435,7 +439,7 @@ final class IRCStore: ObservableObject {
                 appendStatus("Velg en kanal før du bruker /part.", kind: .error)
                 return
             }
-            sendRaw("PART \(selectedConversation.name) :\(argument.isEmpty ? "Forlater kanalen" : argument)")
+            sendRaw("PART \(selectedConversation.name) :\(argument.isEmpty ? configuration.partMessage : argument)")
         case "msg":
             let values = argument.split(separator: " ", maxSplits: 1)
             guard values.count == 2 else {
@@ -516,7 +520,7 @@ final class IRCStore: ObservableObject {
             isAutoAway = false
             isStartAway = false
             reconnectTask?.cancel()
-            sendRaw("QUIT :\(argument.isEmpty ? "MacRelay avsluttes" : argument)")
+            sendRaw("QUIT :\(argument.isEmpty ? configuration.quitMessage : argument)")
             connection.disconnect(reason: "/quit")
             connectionState = .disconnected
             markAllChannelsDisconnected()
@@ -877,7 +881,10 @@ final class IRCStore: ObservableObject {
         ensureConversation(id: id, name: channel, kind: .channel)
         if nick.caseInsensitiveCompare(currentNickname) == .orderedSame {
             mutateConversation(id: id) { $0.isJoined = true }
-            if restoredSelectionID == nil {
+            if pendingManualJoinID == id {
+                pendingManualJoinID = nil
+                selectConversation(id)
+            } else if restoredSelectionID == nil, selectedConversation?.kind == .server {
                 selectConversation(id)
             } else {
                 pendingRestoredChannelIDs.remove(id)
@@ -895,14 +902,13 @@ final class IRCStore: ObservableObject {
         let id = conversationID(for: channel)
         let reason = message.parameters.count > 1 ? ": \(message.parameters[1])" : ""
         if nick.caseInsensitiveCompare(currentNickname) == .orderedSame {
-            mutateConversation(id: id) {
-                $0.isJoined = false
-                $0.users.removeAll()
-            }
             channelsToRestore = Set(channelsToRestore.filter {
                 $0.caseInsensitiveCompare(channel) != .orderedSame
             })
-            appendEvent("Du forlot \(channel)\(reason).", to: id)
+            pendingRestoredChannelIDs.remove(id)
+            if restoredSelectionID == id { clearRestoredSelection() }
+            conversations.removeAll { $0.id == id }
+            if selectedConversationID == id { selectedConversationID = serverID }
             saveSessionState()
         } else {
             removeUser(nick, from: id)
@@ -1251,6 +1257,18 @@ final class IRCStore: ObservableObject {
         if let data = try? JSONEncoder().encode(session) {
             UserDefaults.standard.set(data, forKey: Self.sessionKey)
         }
+    }
+
+    func prepareForTermination() {
+        saveSessionState()
+    }
+
+    private func normalizedDisconnectMessage(_ message: String, fallback: String) -> String {
+        let cleaned = message
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? fallback : cleaned
     }
 
     private func scheduleRestoredSelectionCleanup() {

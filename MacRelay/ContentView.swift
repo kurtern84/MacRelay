@@ -290,7 +290,12 @@ private struct MessageList: View {
                 .padding(.vertical, 8)
             }
             .background(Color(nsColor: .textBackgroundColor))
-            .onAppear { scrollToBottom(proxy) }
+            .onAppear {
+                Task { @MainActor in
+                    await Task.yield()
+                    scrollToBottom(proxy)
+                }
+            }
             .onChange(of: messages.last?.id) { _, id in
                 guard id != nil, isAtBottom else { return }
                 scrollToBottom(proxy)
@@ -329,7 +334,7 @@ private struct MessageRow: View {
                     .textSelection(.enabled)
             }
 
-            Text(message.text)
+            Text(linkifiedText(message.text))
                 .font(.system(.body, design: .monospaced))
                 .italic(message.kind == .action)
                 .foregroundStyle(textColor)
@@ -339,6 +344,23 @@ private struct MessageRow: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 2)
         .background(message.isMention ? Color.orange.opacity(0.10) : Color.clear)
+    }
+
+    private func linkifiedText(_ text: String) -> AttributedString {
+        var attributed = AttributedString(text)
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
+            return attributed
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        for match in detector.matches(in: text, range: range) {
+            guard let url = match.url, let stringRange = Range(match.range, in: text) else { continue }
+            let lowerOffset = text.distance(from: text.startIndex, to: stringRange.lowerBound)
+            let upperOffset = text.distance(from: text.startIndex, to: stringRange.upperBound)
+            let lower = attributed.characters.index(attributed.startIndex, offsetBy: lowerOffset)
+            let upper = attributed.characters.index(attributed.startIndex, offsetBy: upperOffset)
+            attributed[lower..<upper].link = url
+        }
+        return attributed
     }
 
     private var textColor: Color {
@@ -505,6 +527,14 @@ struct ServerSettingsView: View {
                 Toggle("Vis macOS-varsel når navnet mitt nevnes", isOn: $store.configuration.notifyOnMention)
                 Toggle("Spill diskret IRC-varsellyd", isOn: $store.configuration.playNotificationSounds)
                 Text("Bruker macOS-systemlyden Glass ved omtaler og uleste private meldinger.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Meldinger ved frakobling") {
+                TextField("Leave-melding", text: $store.configuration.partMessage)
+                TextField("Quit-melding", text: $store.configuration.quitMessage)
+                Text("Leave-meldingen sendes med PART. Quit-meldingen sendes ved manuell frakobling.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
