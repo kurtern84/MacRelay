@@ -183,9 +183,16 @@ private struct ConversationView: View {
     @ObservedObject var store: IOSIRCStore
     let conversation: Conversation
 
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
+    private var showsUsersBesideChat: Bool {
+        horizontalSizeClass == .regular && verticalSizeClass == .regular
+    }
+
     var body: some View {
         Group {
-            if UIDevice.current.userInterfaceIdiom == .phone, conversation.kind == .channel {
+            if UIDevice.current.userInterfaceIdiom == .phone, conversation.kind == .channel, showsUsersBesideChat {
                 GeometryReader { geometry in
                     HStack(spacing: 0) {
                         chatPane
@@ -209,6 +216,16 @@ private struct ConversationView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if conversation.kind == .channel {
+                if UIDevice.current.userInterfaceIdiom == .phone, !showsUsersBesideChat {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        NavigationLink {
+                            UserListView(store: store, conversation: conversation)
+                                .navigationTitle("Brukere (\(conversation.users.count))")
+                        } label: {
+                            Label("Brukere", systemImage: "person.2")
+                        }
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button("Forlat kanal", role: .destructive) { store.leaveChannel(conversation.id) }
