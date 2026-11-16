@@ -6,24 +6,40 @@ struct IOSContentView: View {
     @ObservedObject var store: IOSIRCStore
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
+    @State private var showingConversations = false
+
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            conversationList
-                .navigationTitle("MacRelay")
-                .toolbar { sidebarToolbar }
-        } content: {
-            if let conversation = store.selectedConversation {
-                ConversationView(store: store, conversation: conversation)
-                    .id(conversation.id)
+        Group {
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                NavigationStack {
+                    chat
+                        .toolbar {
+                            ToolbarItem(placement: .topBarLeading) {
+                                Button {
+                                    showingConversations = true
+                                } label: {
+                                    Label("Samtaler", systemImage: "sidebar.left")
+                                }
+                            }
+                        }
+                        .navigationDestination(isPresented: $showingConversations) {
+                            sidebar
+                        }
+                }
             } else {
-                ContentUnavailableView("Velg en samtale", systemImage: "number")
-            }
-        } detail: {
-            if let conversation = store.selectedConversation, conversation.kind == .channel {
-                UserListView(store: store, conversation: conversation)
-                    .id(conversation.id)
-            } else {
-                ContentUnavailableView("Ingen brukerliste", systemImage: "person.2")
+                NavigationSplitView(columnVisibility: $columnVisibility) {
+                    sidebar
+                } content: {
+                    chat
+                } detail: {
+                    if let conversation = store.selectedConversation, conversation.kind == .channel {
+                        UserListView(store: store, conversation: conversation)
+                            .navigationTitle("Brukere (\(conversation.users.count))")
+                            .id(conversation.id)
+                    } else {
+                        ContentUnavailableView("Ingen brukerliste", systemImage: "person.2")
+                    }
+                }
             }
         }
         .navigationSplitViewStyle(.balanced)
@@ -39,6 +55,22 @@ struct IOSContentView: View {
         }
     }
 
+    private var sidebar: some View {
+        conversationList
+            .navigationTitle("MacRelay")
+            .toolbar { sidebarToolbar }
+    }
+
+    @ViewBuilder
+    private var chat: some View {
+        if let conversation = store.selectedConversation {
+            ConversationView(store: store, conversation: conversation)
+                .id(conversation.id)
+        } else {
+            ContentUnavailableView("Velg en samtale", systemImage: "number")
+        }
+    }
+
     private var conversationList: some View {
         List(selection: Binding(
             get: { store.selectedConversationID },
@@ -46,8 +78,7 @@ struct IOSContentView: View {
         )) {
             Section {
                 ForEach(store.conversations.filter { $0.kind == .server }) { conversation in
-                    ConversationListRow(conversation: conversation)
-                        .tag(conversation.id)
+                    conversationLink(conversation)
                 }
             } header: {
                 HStack {
@@ -63,8 +94,7 @@ struct IOSContentView: View {
             if !channels.isEmpty {
                 Section("Kanaler") {
                     ForEach(channels) { conversation in
-                        ConversationListRow(conversation: conversation)
-                            .tag(conversation.id)
+                        conversationLink(conversation)
                             .swipeActions {
                                 Button(role: .destructive) { store.leaveChannel(conversation.id) } label: {
                                     Label("Forlat", systemImage: "rectangle.portrait.and.arrow.right")
@@ -81,12 +111,30 @@ struct IOSContentView: View {
             if !queries.isEmpty {
                 Section("Private") {
                     ForEach(queries) { conversation in
-                        ConversationListRow(conversation: conversation).tag(conversation.id)
+                        conversationLink(conversation)
                     }
                 }
             }
         }
         .listStyle(.sidebar)
+    }
+
+    @ViewBuilder
+    private func conversationLink(_ conversation: Conversation) -> some View {
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            Button {
+                store.selectConversation(conversation.id)
+                showingConversations = false
+            } label: {
+                ConversationListRow(conversation: conversation)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        } else {
+            NavigationLink(value: conversation.id) {
+                ConversationListRow(conversation: conversation)
+            }
+        }
     }
 
     @ToolbarContentBuilder
@@ -136,6 +184,51 @@ private struct ConversationView: View {
     let conversation: Conversation
 
     var body: some View {
+        Group {
+            if UIDevice.current.userInterfaceIdiom == .phone, conversation.kind == .channel {
+                GeometryReader { geometry in
+                    HStack(spacing: 0) {
+                        chatPane
+                        Divider()
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text("Brukere (\(conversation.users.count))")
+                                .font(.subheadline.bold())
+                                .padding(8)
+                            Divider()
+                            UserListView(store: store, conversation: conversation)
+                                .listStyle(.plain)
+                        }
+                        .frame(width: min(200, geometry.size.width * 0.30))
+                    }
+                }
+            } else {
+                chatPane
+            }
+        }
+        .navigationTitle(conversation.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if conversation.kind == .channel {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button("Forlat kanal", role: .destructive) { store.leaveChannel(conversation.id) }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                }
+            }
+            if store.isConnectedViaZNC {
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 0) {
+                        Text(conversation.name).font(.headline)
+                        Text("via ZNC").font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    private var chatPane: some View {
         VStack(spacing: 0) {
             if conversation.kind == .channel {
                 VStack(alignment: .leading, spacing: 3) {
@@ -168,27 +261,6 @@ private struct ConversationView: View {
             .padding(.horizontal)
             .padding(.vertical, 11)
             .background(.bar)
-        }
-        .navigationTitle(conversation.name)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            if conversation.kind == .channel {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button("Forlat kanal", role: .destructive) { store.leaveChannel(conversation.id) }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
-                }
-            }
-            if store.isConnectedViaZNC {
-                ToolbarItem(placement: .principal) {
-                    VStack(spacing: 0) {
-                        Text(conversation.name).font(.headline)
-                        Text("via ZNC").font(.caption2).foregroundStyle(.secondary)
-                    }
-                }
-            }
         }
     }
 }
@@ -290,7 +362,6 @@ private struct UserListView: View {
             }
             .buttonStyle(.plain)
         }
-        .navigationTitle("Brukere (\(conversation.users.count))")
     }
 }
 
